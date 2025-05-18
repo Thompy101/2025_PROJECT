@@ -1,0 +1,188 @@
+import os
+import requests
+from bs4 import BeautifulSoup
+from urllib.parse import urljoin
+# import certifi # No longer strictly needed if verify=False, but doesn't hurt to leave
+import warnings # For suppressing InsecureRequestWarning
+from urllib3.exceptions import InsecureRequestWarning # For suppressing InsecureRequestWarning
+import pandas as pd # <-- ADDED PANDAS IMPORT
+
+# Suppress only the InsecureRequestWarning caused by verify=False
+# This is to keep the output cleaner during diagnostics.
+warnings.simplefilter('ignore', InsecureRequestWarning)
+
+# URL of the page to scrape
+BASE_URL = "https://bso.hscni.net/directorates/operations/family-practitioner-services/directorates-operations-family-practitioner-services-information-unit/general-pharmaceutical-services-and-prescribing-statistics/dispensing-by-contractor/"
+
+# Directory to save downloaded files
+# Using a raw string for the Windows path
+DOWNLOAD_DIR = r"C:\Users\Andrew\OneDrive\Documents\2025_PROJECT\2025_PROJECT\html_project\Python_webscrape\Webscrape Data"
+MERGED_CSV_FILENAME = "merged_bso_dispensing_data.csv"
+
+# Create the download directory if it doesn't exist
+if not os.path.exists(DOWNLOAD_DIR):
+    os.makedirs(DOWNLOAD_DIR)
+    print(f"Created directory: {DOWNLOAD_DIR}")
+
+def download_file(url, directory):
+    """Downloads a file from a given URL into the specified directory."""
+    try:
+        filename = url.split('/')[-1].split('?')[0]
+        filepath = os.path.join(directory, filename)
+        if os.path.exists(filepath):
+            print(f"File already exists: {filepath}. Skipping.")
+            return True
+        print(f"Downloading {filename} from {url}...")
+        response = requests.get(url, stream=True, verify=False)
+        response.raise_for_status()
+        with open(filepath, 'wb') as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                f.write(chunk)
+        print(f"Successfully downloaded: {filepath}")
+        return True
+    except requests.exceptions.RequestException as e:
+        print(f"Error downloading {url}: {e}")
+        return False
+    except Exception as e:
+        print(f"An unexpected error occurred while downloading {url}: {e}")
+        return False
+
+def merge_excel_files_to_dataframe(directory):
+    """
+    Reads all Excel files in the specified directory and merges them into a single pandas DataFrame.
+    Assumes all Excel files have data on the first sheet.
+    """
+    all_dataframes = []
+    excel_files = [f for f in os.listdir(directory) if f.endswith('.xlsx')]
+
+    if not excel_files:
+        print(f"No Excel files found in {directory} to merge.")
+        return None
+
+    print(f"\nStarting to merge {len(excel_files)} Excel files from {directory} into a DataFrame...")
+
+    for filename in excel_files:
+        filepath = os.path.join(directory, filename)
+        try:
+            df = pd.read_excel(filepath, sheet_name=0)
+            df['source_file'] = filename # Add a column to identify the source file
+            all_dataframes.append(df)
+            print(f"Successfully read and added to DataFrame list: {filename}")
+        except Exception as e:
+            print(f"Error reading or processing {filepath} into DataFrame: {e}")
+            print("This file will be skipped for DataFrame merge.")
+
+    if not all_dataframes:
+        print("No dataframes were successfully read. Cannot merge.")
+        return None
+
+    try:
+        merged_df = pd.concat(all_dataframes, ignore_index=True)
+        print("\nAll Excel files merged successfully into a single DataFrame in memory.")
+        return merged_df
+    except Exception as e:
+        print(f"Error during final concatenation of DataFrames: {e}")
+        return None
+
+# --- Alternative: More memory-efficient merge directly to CSV (if RAM is an issue for large files) ---
+# def merge_excel_files_directly_to_csv(directory, output_csv_path):
+#     """
+#     Reads Excel files one by one and appends them to a CSV file.
+#     More memory efficient if individual DataFrames are too large to hold all in memory at once.
+#     """
+#     excel_files = [f for f in os.listdir(directory) if f.endswith('.xlsx')]
+#     if not excel_files:
+#         print(f"No Excel files found in {directory} to merge.")
+#         return False
+#
+#     print(f"\nStarting to merge {len(excel_files)} Excel files from {directory} directly to {output_csv_path}...")
+#     is_first_file = True
+#     files_processed_count = 0
+#
+#     for filename in excel_files:
+#         filepath = os.path.join(directory, filename)
+#         try:
+#             df = pd.read_excel(filepath, sheet_name=0)
+#             df['source_file'] = filename
+#
+#             if is_first_file:
+#                 df.to_csv(output_csv_path, index=False, mode='w') # Write with header
+#                 is_first_file = False
+#             else:
+#                 df.to_csv(output_csv_path, index=False, mode='a', header=False) # Append without header
+#
+#             print(f"Successfully processed and appended to CSV: {filename}")
+#             files_processed_count += 1
+#         except Exception as e:
+#             print(f"Error reading or processing {filepath} for CSV append: {e}")
+#             print("This file will be skipped.")
+#
+#     if files_processed_count > 0:
+#         print(f"\nSuccessfully merged {files_processed_count} files into {output_csv_path}")
+#         return True
+#     else:
+#         print("\nNo files were successfully processed to CSV.")
+#         return False
+# --- End of alternative merge function ---
+
+def scrape_bso_data(page_url, download_directory, output_csv_filename):
+    """Scrapes the BSO page for Excel file links, downloads them, merges them, and saves to CSV."""
+    print(f"Attempting to scrape data from: {page_url}")
+    try:
+        response = requests.get(page_url, verify=False)
+        response.raise_for_status()
+    except requests.exceptions.RequestException as e:
+        print(f"Error fetching page {page_url}: {e}")
+        return
+
+    soup = BeautifulSoup(response.content, 'html.parser')
+    files_found_count = 0
+    files_downloaded_count = 0
+
+    for link_tag in soup.find_all('a', href=True):
+        href = link_tag['href']
+        if href.endswith('.xlsx') and ('wp-content/uploads/' in href or 'bso.hscni.net' in href):
+            files_found_count += 1
+            file_url = urljoin(page_url, href)
+            if download_file(file_url, download_directory):
+                files_downloaded_count +=1
+
+    if files_found_count == 0:
+        print("No .xlsx file links matching the criteria were found on the page during this run.")
+    else:
+        print(f"\nDownload phase complete. Found {files_found_count} potential .xlsx files. Successfully downloaded {files_downloaded_count} new files this run.")
+
+    # --- Merge downloaded files (or existing files in directory) into a DataFrame and then save to CSV ---
+    # This check ensures we attempt to merge even if no new files were downloaded but files exist from previous runs.
+    if os.listdir(download_directory):
+        master_dataframe = merge_excel_files_to_dataframe(download_directory)
+        if master_dataframe is not None:
+            print("\n--- Merged DataFrame Info (In Memory) ---")
+            print(f"Total rows: {len(master_dataframe)}")
+            print(f"Total columns: {len(master_dataframe.columns)}")
+            print("First 5 rows of the merged data:")
+            print(master_dataframe.head())
+
+            # Save the merged DataFrame to a new CSV file
+            output_csv_path = os.path.join(download_directory, output_csv_filename)
+            try:
+                master_dataframe.to_csv(output_csv_path, index=False)
+                print(f"\nMerged data successfully saved to: {output_csv_path}")
+            except Exception as e:
+                print(f"Error saving merged DataFrame to CSV {output_csv_path}: {e}")
+        else:
+            print("\nDataFrame merging failed or produced no data. CSV will not be saved.")
+    else:
+        print("\nNo files were downloaded and no files found in the directory. Skipping merge and CSV save process.")
+
+    # --- To use the more memory-efficient direct-to-CSV merge instead of the above block, you would comment out
+    # --- the call to merge_excel_files_to_dataframe and the subsequent saving block, and instead call:
+    # if os.listdir(download_directory):
+    #     output_csv_path = os.path.join(download_directory, output_csv_filename)
+    #     merge_excel_files_directly_to_csv(download_directory, output_csv_path)
+    # else:
+    #     print("\nNo files were downloaded and no files found in the directory. Skipping merge process.")
+    # ---
+
+if __name__ == "__main__":
+    scrape_bso_data(BASE_URL, DOWNLOAD_DIR, MERGED_CSV_FILENAME)
