@@ -3,26 +3,24 @@ import pandas as pd
 from flask import Flask, render_template, request, send_file, redirect, url_for, flash, session
 import io # For sending file in memory
 import logging
-import time # For potential timing, though not strictly used in this version
+import time 
 
 # --- Flask App Initialization ---
 app = Flask(__name__)
-app.secret_key = 'your_very_secret_key_for_session_and_flash_bso_analyzer' # Unique secret key
+app.secret_key = 'your_very_secret_key_for_session_and_flash_bso_analyzer' 
 
 # --- Configuration ---
-# Path to the single merged CSV file (output of your scraper script)
-INPUT_CSV_FILE_PATH = r"D:\Data2\merged_bso_dispensing_data.csv" # Ensure this path is correct
+INPUT_CSV_FILE_PATH = r"D:\Data2\merged_bso_dispensing_data.csv" 
 
 # --- Helper Functions ---
 def load_single_csv_file(file_path):
-    """Reads a single CSV file into a pandas DataFrame, trying common encodings."""
     app.logger.info(f"Attempting to load data from CSV file: {file_path}")
     if not os.path.exists(file_path):
         app.logger.error(f"Input CSV file not found at {file_path}")
         flash(f"Error: Input CSV file not found at {file_path}. Please run the scraper script first.", "danger")
         return pd.DataFrame()
 
-    encodings_to_try = ['utf-8', 'latin1', 'cp1252'] # Common encodings
+    encodings_to_try = ['utf-8', 'latin1', 'cp1252'] 
     df = None
 
     for encoding in encodings_to_try:
@@ -30,34 +28,27 @@ def load_single_csv_file(file_path):
             app.logger.info(f"Trying to read CSV with encoding: {encoding}")
             df = pd.read_csv(file_path, encoding=encoding)
             app.logger.info(f"Successfully loaded CSV: {os.path.basename(file_path)} with encoding: {encoding}. Shape: {df.shape if df is not None else 'None'}")
-            return df # Return as soon as a successful encoding is found
+            return df 
         except UnicodeDecodeError:
             app.logger.warning(f"Failed to decode {os.path.basename(file_path)} with encoding: {encoding}")
         except pd.errors.EmptyDataError:
             app.logger.warning(f"CSV file {file_path} is empty (encoding: {encoding}).")
             flash(f"Warning: The CSV data file '{os.path.basename(file_path)}' appears to be empty.", "warning")
-            return pd.DataFrame() # Return empty if file is empty
+            return pd.DataFrame() 
         except Exception as e:
             app.logger.error(f"Error reading CSV file {file_path} with encoding {encoding}: {e}")
-            # Don't flash for every encoding attempt, flash once if all fail
-            # flash(f"Error reading CSV file (encoding {encoding}): {e}", "danger")
-            # return pd.DataFrame() # Don't return yet, try other encodings
 
-    # If all encodings failed
     app.logger.error(f"Failed to decode {os.path.basename(file_path)} with all attempted encodings: {encodings_to_try}")
     flash(f"Error: Could not decode the CSV file with common encodings. Please check the file format.", "danger")
     return pd.DataFrame()
 
 
 def get_unique_chemist_ids(df):
-    """Extracts unique, sorted chemist IDs from the DataFrame."""
     if df.empty or 'Chemist' not in df.columns:
         app.logger.warning("DataFrame is empty or 'Chemist' column is missing for unique ID extraction.")
         return []
     try:
-        # Convert to numeric, drop NaNs, convert to int, get unique, sort
         unique_ids = pd.to_numeric(df['Chemist'], errors='coerce').dropna().unique()
-        # Ensure they are integers and sorted
         return sorted([int(uid) for uid in unique_ids])
     except Exception as e:
         app.logger.error(f"Error extracting unique chemist IDs: {e}")
@@ -65,25 +56,18 @@ def get_unique_chemist_ids(df):
         return []
 
 def process_one_chemist_data(df_full, chemist_id):
-    """Processes data for a single chemist, including rolling average."""
-    # Work on a copy to avoid modifying the original df passed around
     df_full_copy = df_full.copy()
-    # Ensure 'Chemist' column is numeric for filtering
     df_full_copy['Chemist'] = pd.to_numeric(df_full_copy['Chemist'], errors='coerce')
-    
-    # Filter by the specific chemist ID (ensure chemist_id is also numeric)
     df_chemist = df_full_copy[df_full_copy['Chemist'] == float(chemist_id)].copy()
 
     if df_chemist.empty:
         app.logger.info(f"No data found for Chemist ID: {chemist_id} after initial filtering.")
         return pd.DataFrame()
 
-    # Ensure 'Year', 'Month', and 'Number of Items' are in appropriate formats
     df_chemist.loc[:, 'Year'] = pd.to_numeric(df_chemist['Year'], errors='coerce').fillna(0).astype(int)
     df_chemist.loc[:, 'Month'] = pd.to_numeric(df_chemist['Month'], errors='coerce').fillna(0).astype(int)
     df_chemist.loc[:, 'Number of Items'] = pd.to_numeric(df_chemist['Number of Items'], errors='coerce').fillna(0)
     
-    # Filter out rows with invalid Year or Month
     df_chemist = df_chemist[(df_chemist['Year'] > 0) & (df_chemist['Month'] >= 1) & (df_chemist['Month'] <= 12)].copy()
 
     if df_chemist.empty:
@@ -94,36 +78,28 @@ def process_one_chemist_data(df_full, chemist_id):
     aggregated_df = df_chemist.groupby(['Year', 'Month'])['Number of Items'].sum().reset_index()
     aggregated_df = aggregated_df.rename(columns={'Number of Items': 'Total Items'})
     
-    # Sort by Year and Month BEFORE calculating rolling average
     aggregated_df = aggregated_df.sort_values(by=['Year', 'Month']).reset_index(drop=True)
-
-    # Calculate rolling 12-month average for 'Total Items' and round to 0 decimal places, then convert to int
-    aggregated_df['Rolling 12m Avg Items'] = aggregated_df['Total Items'].rolling(window=12, min_periods=1).mean().round(0).astype(int) # MODIFIED HERE
+    aggregated_df['Rolling 12m Avg Items'] = aggregated_df['Total Items'].rolling(window=12, min_periods=1).mean().round(0).astype(int)
     
-    aggregated_df['Chemist'] = chemist_id # Use the original chemist_id for this column
+    aggregated_df['Chemist'] = chemist_id 
     
     return aggregated_df[['Chemist', 'Year', 'Month', 'Total Items', 'Rolling 12m Avg Items']]
 
 
 def process_and_aggregate_data(df_input, chemist_id1, chemist_id2=None):
-    """
-    Prepares data for one or two chemists.
-    If two chemist_ids are provided, their data is merged for comparison.
-    """
     if df_input.empty:
         app.logger.warning("Input DataFrame is empty for processing.")
-        return pd.DataFrame(), "single" # Return type indicator
+        return pd.DataFrame(), "single" 
 
-    required_cols = ['Chemist', 'Year', 'Month', 'Number of Items'] # These are from COLUMNS_TO_KEEP in scraper
+    required_cols = ['Chemist', 'Year', 'Month', 'Number of Items'] 
     if not all(col in df_input.columns for col in required_cols):
         missing = [col for col in required_cols if col not in df_input.columns]
         app.logger.error(f"Input DataFrame is missing required columns: {', '.join(missing)}")
         flash(f"Error: Merged data is missing required columns: {', '.join(missing)}. Please ensure 'Chemist', 'Year', 'Month', 'Number of Items' are present.", "danger")
         return pd.DataFrame(), "single"
 
-    df_clean = df_input.copy() # Work with a copy of the input
+    df_clean = df_input.copy()
 
-    # Process data for the first chemist
     df_c1 = process_one_chemist_data(df_clean, chemist_id1)
     if df_c1.empty:
         flash(f"No data found for Chemist {chemist_id1}.", "info")
@@ -131,34 +107,77 @@ def process_and_aggregate_data(df_input, chemist_id1, chemist_id2=None):
 
     if chemist_id2 is None or chemist_id1 == chemist_id2:
         app.logger.info(f"Processing complete for single Chemist ID: {chemist_id1}")
-        return df_c1, "single"
+        # For single view, ensure the column names are standard for the template
+        df_c1_display = df_c1.rename(columns={
+            'Total Items': f'Total Items C{int(float(chemist_id1))}',
+            'Rolling 12m Avg Items': f'Rolling Avg C{int(float(chemist_id1))}'
+        })
+        return df_c1_display, "single" # Return the renamed df for consistency if needed by template
+        # Actually, for single view, the original column names from process_one_chemist_data are fine.
+        # The template for single view might expect 'Total Items' and 'Rolling 12m Avg Items'
+        # Let's return df_c1 directly for single view and handle renaming only for comparison.
+        # However, results.html expects dynamic names based on view_type.
+        # So, for single view, we should still provide specific names if the template expects it.
+        # Let's simplify: the results template can just display columns as they are.
+        # The renaming to "Total Items C..." is primarily for the comparison case.
+        # For single view, the 'Chemist' column is already in df_c1.
+        # The results.html template uses chemist_id_display for the title, which is fine.
+        # The table data will just render the columns from df_c1.
+        # Let's ensure df_c1 for single view has clear column names if they differ from comparison.
+        # The current `process_one_chemist_data` returns: 'Chemist', 'Year', 'Month', 'Total Items', 'Rolling 12m Avg Items'
+        # This is fine for single view.
+
+        return df_c1, "single" # Return df_c1 as is for single view.
     else:
-        # Process data for the second chemist
         app.logger.info(f"Processing data for second Chemist ID: {chemist_id2} for comparison.")
         df_c2 = process_one_chemist_data(df_clean, chemist_id2)
 
         if df_c2.empty:
             flash(f"No data found for the second Chemist {chemist_id2}. Displaying data for Chemist {chemist_id1} only.", "info")
-            return df_c1, "single" # Fallback to single view if C2 has no data
+            return df_c1, "single" 
 
         c1_id_int = int(float(chemist_id1))
         c2_id_int = int(float(chemist_id2))
 
+        # Define column names for clarity
+        c1_items_col_name = f'Items C{c1_id_int}'
+        c1_rolling_col_name = f'Rolling Avg C{c1_id_int}'
+        c2_items_col_name = f'Items C{c2_id_int}'
+        c2_rolling_col_name = f'Rolling Avg C{c2_id_int}'
+        separator_col_name = ' ' # A single space for the column name
+
         df_c1_renamed = df_c1.rename(columns={
-            'Total Items': f'Total Items C{c1_id_int}',
-            'Rolling 12m Avg Items': f'Rolling Avg C{c1_id_int}'
+            'Total Items': c1_items_col_name,
+            'Rolling 12m Avg Items': c1_rolling_col_name
         }).drop(columns=['Chemist'])
 
         df_c2_renamed = df_c2.rename(columns={
-            'Total Items': f'Total Items C{c2_id_int}',
-            'Rolling 12m Avg Items': f'Rolling Avg C{c2_id_int}'
+            'Total Items': c2_items_col_name,
+            'Rolling 12m Avg Items': c2_rolling_col_name
         }).drop(columns=['Chemist'])
 
         comparison_df = pd.merge(df_c1_renamed, df_c2_renamed, on=['Year', 'Month'], how='outer')
+        
+        # Add the separator column
+        comparison_df[separator_col_name] = '' # Fill with empty strings
+
+        # Define the desired column order for display
+        display_columns = ['Year', 'Month', 
+                           c1_items_col_name, c1_rolling_col_name, 
+                           separator_col_name, 
+                           c2_items_col_name, c2_rolling_col_name]
+        
+        # Ensure all display columns exist, fill with NA if some merge resulted in missing data for a C1/C2
+        for col in display_columns:
+            if col not in comparison_df.columns:
+                comparison_df[col] = pd.NA # Or appropriate fill value like 0 or ''
+
+        comparison_df = comparison_df[display_columns] # Reorder and select
         comparison_df = comparison_df.sort_values(by=['Year', 'Month']).reset_index(drop=True)
         
-        comparison_df['Chemist1_ID'] = c1_id_int
-        comparison_df['Chemist2_ID'] = c2_id_int
+        # These ID columns are not for display but can be useful if we decide to keep them for download
+        # comparison_df['Chemist1_ID_Internal'] = c1_id_int 
+        # comparison_df['Chemist2_ID_Internal'] = c2_id_int
 
         app.logger.info(f"Comparison data generated for Chemist {c1_id_int} and Chemist {c2_id_int}.")
         return comparison_df, "comparison"
@@ -166,7 +185,6 @@ def process_and_aggregate_data(df_input, chemist_id1, chemist_id2=None):
 # --- Flask Routes ---
 @app.route('/', methods=['GET'])
 def index():
-    """Serves the main page with the form."""
     consolidated_data = load_single_csv_file(INPUT_CSV_FILE_PATH) 
     if consolidated_data.empty and not os.path.exists(INPUT_CSV_FILE_PATH):
         return render_template('index.html', unique_chemists=[])
@@ -182,7 +200,6 @@ def index():
 
 @app.route('/process', methods=['POST'])
 def process_data_route():
-    """Handles form submission, processes data, and then shows it or allows download."""
     try:
         y_input = request.form.get('y_input', 'ALL_Data') 
         str_chemist_input_1 = request.form.get('chemist_number_1')
@@ -226,7 +243,14 @@ def process_data_route():
         else: 
             output_filename = f'Chemist{c1_id_for_filename}_FilteredData_{y_input.replace(" ", "_")}.xlsx'
             title_chemist_id_display = str(c1_id_for_filename)
+            # For single view, ensure the columns passed to to_html are standard
+            # processed_df might need renaming if process_one_chemist_data returns generic names
+            # Current process_one_chemist_data returns: 'Chemist', 'Year', 'Month', 'Total Items', 'Rolling 12m Avg Items'
+            # This is fine.
 
+        # For comparison view, processed_df already has the specific column order including the separator
+        # For single view, processed_df has 'Chemist', 'Year', 'Month', 'Total Items', 'Rolling 12m Avg Items'
+        # The to_html will render these as is.
         data_html_table = processed_df.to_html(classes='data-table table table-striped table-hover', index=False, border=0, escape=False)
         
         session['processed_data'] = processed_df.to_dict('records') 
@@ -247,7 +271,6 @@ def process_data_route():
 
 @app.route('/download_excel')
 def download_excel():
-    """Serves the processed data as an Excel file for download."""
     if 'processed_data' in session and 'output_filename' in session:
         try:
             data_records = session.pop('processed_data', None) 
@@ -279,7 +302,6 @@ def download_excel():
         return redirect(url_for('index'))
 
 def flash_is_pending():
-    """Checks if there are any messages waiting to be flashed."""
     return bool(request.environ.get('werkzeug.request') and request.environ['werkzeug.request'].session.get('_flashes'))
 
 if __name__ == '__main__':
