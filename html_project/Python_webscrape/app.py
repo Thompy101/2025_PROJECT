@@ -97,8 +97,8 @@ def process_one_chemist_data(df_full, chemist_id):
     # Sort by Year and Month BEFORE calculating rolling average
     aggregated_df = aggregated_df.sort_values(by=['Year', 'Month']).reset_index(drop=True)
 
-    # Calculate rolling 12-month average for 'Total Items'
-    aggregated_df['Rolling 12m Avg Items'] = aggregated_df['Total Items'].rolling(window=12, min_periods=1).mean().round(2)
+    # Calculate rolling 12-month average for 'Total Items' and round to 0 decimal places, then convert to int
+    aggregated_df['Rolling 12m Avg Items'] = aggregated_df['Total Items'].rolling(window=12, min_periods=1).mean().round(0).astype(int) # MODIFIED HERE
     
     aggregated_df['Chemist'] = chemist_id # Use the original chemist_id for this column
     
@@ -121,8 +121,6 @@ def process_and_aggregate_data(df_input, chemist_id1, chemist_id2=None):
         flash(f"Error: Merged data is missing required columns: {', '.join(missing)}. Please ensure 'Chemist', 'Year', 'Month', 'Number of Items' are present.", "danger")
         return pd.DataFrame(), "single"
 
-    # The 'Chemist' column is converted to numeric within process_one_chemist_data on a copy
-    # df_clean = df_input.dropna(subset=['Chemist']).copy() # Initial dropna based on original 'Chemist' column
     df_clean = df_input.copy() # Work with a copy of the input
 
     # Process data for the first chemist
@@ -143,8 +141,6 @@ def process_and_aggregate_data(df_input, chemist_id1, chemist_id2=None):
             flash(f"No data found for the second Chemist {chemist_id2}. Displaying data for Chemist {chemist_id1} only.", "info")
             return df_c1, "single" # Fallback to single view if C2 has no data
 
-        # Prepare for merge: Use original chemist_id for column renaming
-        # Ensure IDs are integers for cleaner column names
         c1_id_int = int(float(chemist_id1))
         c2_id_int = int(float(chemist_id2))
 
@@ -158,11 +154,9 @@ def process_and_aggregate_data(df_input, chemist_id1, chemist_id2=None):
             'Rolling 12m Avg Items': f'Rolling Avg C{c2_id_int}'
         }).drop(columns=['Chemist'])
 
-        # Merge the two dataframes
         comparison_df = pd.merge(df_c1_renamed, df_c2_renamed, on=['Year', 'Month'], how='outer')
         comparison_df = comparison_df.sort_values(by=['Year', 'Month']).reset_index(drop=True)
         
-        # Add original chemist IDs for reference, could be useful in template
         comparison_df['Chemist1_ID'] = c1_id_int
         comparison_df['Chemist2_ID'] = c2_id_int
 
@@ -175,12 +169,9 @@ def index():
     """Serves the main page with the form."""
     consolidated_data = load_single_csv_file(INPUT_CSV_FILE_PATH) 
     if consolidated_data.empty and not os.path.exists(INPUT_CSV_FILE_PATH):
-        # Flash message handled by load_single_csv_file
         return render_template('index.html', unique_chemists=[])
     elif consolidated_data.empty and os.path.exists(INPUT_CSV_FILE_PATH):
-        # Flash message handled by load_single_csv_file if it fails to decode or read,
-        # or if it's empty.
-        if not flash_is_pending(): # Add a generic one if load_single_csv_file didn't flash
+        if not flash_is_pending(): 
              flash("Could not load data to populate chemist dropdown. The CSV file might be empty or improperly formatted.", "warning")
         return render_template('index.html', unique_chemists=[])
 
@@ -193,9 +184,9 @@ def index():
 def process_data_route():
     """Handles form submission, processes data, and then shows it or allows download."""
     try:
-        y_input = request.form.get('y_input', 'ALL_Data') # Used for output filename
+        y_input = request.form.get('y_input', 'ALL_Data') 
         str_chemist_input_1 = request.form.get('chemist_number_1')
-        str_chemist_input_2 = request.form.get('chemist_number_2') # Can be empty string
+        str_chemist_input_2 = request.form.get('chemist_number_2') 
 
         if not str_chemist_input_1:
             flash("Please select Chemist 1.", "warning")
@@ -203,12 +194,12 @@ def process_data_route():
 
         chemist_filter_number_1 = int(str_chemist_input_1)
         chemist_filter_number_2 = None
-        if str_chemist_input_2 and str_chemist_input_2.isdigit(): # Check if it's a digit string
+        if str_chemist_input_2 and str_chemist_input_2.isdigit(): 
             chemist_filter_number_2 = int(str_chemist_input_2)
             if chemist_filter_number_1 == chemist_filter_number_2:
                 flash("Please select two different chemists for comparison, or leave Chemist 2 blank for a single view.", "info")
-                chemist_filter_number_2 = None # Treat as single view if same
-        elif str_chemist_input_2: # If it's not empty but not a digit (e.g. the "" from "-- None --")
+                chemist_filter_number_2 = None 
+        elif str_chemist_input_2: 
              chemist_filter_number_2 = None
 
     except ValueError:
@@ -221,13 +212,11 @@ def process_data_route():
 
     consolidated_data = load_single_csv_file(INPUT_CSV_FILE_PATH) 
     if consolidated_data.empty:
-        # Flash message handled by load_single_csv_file
         return redirect(url_for('index'))
 
     processed_df, view_type = process_and_aggregate_data(consolidated_data, chemist_filter_number_1, chemist_filter_number_2)
 
     if not processed_df.empty:
-        # Ensure chemist IDs used in filename are integers for cleaner names
         c1_id_for_filename = int(float(chemist_filter_number_1))
         
         if view_type == "comparison" and chemist_filter_number_2 is not None:
@@ -242,7 +231,7 @@ def process_data_route():
         
         session['processed_data'] = processed_df.to_dict('records') 
         session['output_filename'] = output_filename
-        session['view_type'] = view_type # Store view type for download logic if needed
+        session['view_type'] = view_type 
 
         app.logger.info(f"Data processed. Rendering results page for: {title_chemist_id_display}")
         return render_template('results.html', 
@@ -252,8 +241,7 @@ def process_data_route():
                                download_filename=output_filename,
                                view_type=view_type)
     else:
-        # Flash message should be handled by process_and_aggregate_data if it returned empty
-        if not flash_is_pending(): # Check if a flash message was already set by processing functions
+        if not flash_is_pending(): 
              flash("No data to display or generate Excel file after processing.", "info")
         return redirect(url_for('index'))
 
@@ -262,9 +250,8 @@ def download_excel():
     """Serves the processed data as an Excel file for download."""
     if 'processed_data' in session and 'output_filename' in session:
         try:
-            data_records = session.pop('processed_data', None) # Pop to clear after download
+            data_records = session.pop('processed_data', None) 
             output_filename = session.pop('output_filename', 'filtered_data.xlsx')
-            # view_type = session.pop('view_type', 'single') # Optional: if download needs to know
             
             if not data_records:
                 flash("No data found to download. Please try filtering again.", "warning")
@@ -274,7 +261,7 @@ def download_excel():
             
             excel_buffer = io.BytesIO()
             df_to_download.to_excel(excel_buffer, index=False, engine='openpyxl')
-            excel_buffer.seek(0) # Reset buffer's position to the beginning
+            excel_buffer.seek(0) 
 
             app.logger.info(f"Sending file for download: {output_filename}")
             return send_file(
@@ -293,14 +280,9 @@ def download_excel():
 
 def flash_is_pending():
     """Checks if there are any messages waiting to be flashed."""
-    # Accessing session directly like this is generally okay in Flask request context
-    # Flask's _flashes is a list of (category, message) tuples.
     return bool(request.environ.get('werkzeug.request') and request.environ['werkzeug.request'].session.get('_flashes'))
 
 if __name__ == '__main__':
-    # Set up basic logging
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
     app.logger.info("Flask application starting...")
-    # For development: app.run(debug=True)
-    # For production, use a proper WSGI server like Gunicorn or Waitress.
-    app.run(debug=True, host='0.0.0.0', port=5001) # Using port 5001 as an example
+    app.run(debug=True, host='0.0.0.0', port=5001)
