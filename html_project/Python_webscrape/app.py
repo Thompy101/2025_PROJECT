@@ -7,17 +7,22 @@ import time
 
 # --- Flask App Initialization ---
 app = Flask(__name__)
-app.secret_key = 'your_very_secret_key_for_session_and_flash_bso_analyzer' 
+app.secret_key = 'your_very_secret_key_for_session_and_flash_bso_analyzer_v3' # Unique secret key
 
 # --- Configuration ---
-INPUT_CSV_FILE_PATH = r"D:\Data2\merged_bso_dispensing_data.csv" 
+# Path to the main data CSV file (output of your scraper script)
+INPUT_DATA_CSV_FILE_PATH = r"D:\Data2\merged_bso_dispensing_data.csv" # Ensure this path is correct
+
+# Path to the chemist details CSV file (output of your chemist_list_processor script)
+CHEMIST_DETAILS_CSV_PATH = r"E:\Project\2025_PROJECT\processed_chemist_data\formatted_chemist_list.csv" # EXAMPLE PATH - PLEASE UPDATE
 
 # --- Helper Functions ---
-def load_single_csv_file(file_path):
-    app.logger.info(f"Attempting to load data from CSV file: {file_path}")
+def load_csv_data(file_path, file_description="CSV"):
+    """Reads a single CSV file into a pandas DataFrame, trying common encodings."""
+    app.logger.info(f"Attempting to load data from {file_description} file: {file_path}")
     if not os.path.exists(file_path):
-        app.logger.error(f"Input CSV file not found at {file_path}")
-        flash(f"Error: Input CSV file not found at {file_path}. Please run the scraper script first.", "danger")
+        app.logger.error(f"Input {file_description} file not found at {file_path}")
+        flash(f"Error: Input {file_description} file not found at {file_path}. Please ensure the file exists.", "danger")
         return pd.DataFrame()
 
     encodings_to_try = ['utf-8', 'latin1', 'cp1252'] 
@@ -25,35 +30,72 @@ def load_single_csv_file(file_path):
 
     for encoding in encodings_to_try:
         try:
-            app.logger.info(f"Trying to read CSV with encoding: {encoding}")
+            app.logger.info(f"Trying to read {file_description} with encoding: {encoding}")
             df = pd.read_csv(file_path, encoding=encoding)
-            app.logger.info(f"Successfully loaded CSV: {os.path.basename(file_path)} with encoding: {encoding}. Shape: {df.shape if df is not None else 'None'}")
+            app.logger.info(f"Successfully loaded {file_description}: {os.path.basename(file_path)} with encoding: {encoding}. Shape: {df.shape if df is not None else 'None'}")
             return df 
         except UnicodeDecodeError:
             app.logger.warning(f"Failed to decode {os.path.basename(file_path)} with encoding: {encoding}")
         except pd.errors.EmptyDataError:
-            app.logger.warning(f"CSV file {file_path} is empty (encoding: {encoding}).")
-            flash(f"Warning: The CSV data file '{os.path.basename(file_path)}' appears to be empty.", "warning")
+            app.logger.warning(f"{file_description} file {file_path} is empty (encoding: {encoding}).")
+            flash(f"Warning: The {file_description} data file '{os.path.basename(file_path)}' appears to be empty.", "warning")
             return pd.DataFrame() 
         except Exception as e:
-            app.logger.error(f"Error reading CSV file {file_path} with encoding {encoding}: {e}")
+            app.logger.error(f"Error reading {file_description} file {file_path} with encoding {encoding}: {e}")
 
     app.logger.error(f"Failed to decode {os.path.basename(file_path)} with all attempted encodings: {encodings_to_try}")
-    flash(f"Error: Could not decode the CSV file with common encodings. Please check the file format.", "danger")
+    flash(f"Error: Could not decode the {file_description} file with common encodings. Please check the file format.", "danger")
     return pd.DataFrame()
 
+def get_chemist_details_for_dropdown(chemist_details_file_path):
+    """Loads chemist details and prepares them for the dropdown."""
+    df_chemists = load_csv_data(chemist_details_file_path, file_description="Chemist Details")
+    
+    if df_chemists.empty:
+        app.logger.warning("Chemist details DataFrame is empty. Dropdown will be empty or show an error.")
+        return []
 
-def get_unique_chemist_ids(df):
-    if df.empty or 'Chemist' not in df.columns:
-        app.logger.warning("DataFrame is empty or 'Chemist' column is missing for unique ID extraction.")
-        return []
-    try:
-        unique_ids = pd.to_numeric(df['Chemist'], errors='coerce').dropna().unique()
-        return sorted([int(uid) for uid in unique_ids])
-    except Exception as e:
-        app.logger.error(f"Error extracting unique chemist IDs: {e}")
-        flash(f"Could not extract chemist IDs from the data: {e}", "warning")
-        return []
+    # Expected columns in formatted_chemist_list.csv: 'Chemist ID', 'Name', 'Full Address', 'Postcode'
+    required_details_cols = ['Chemist ID', 'Name'] # 'Full Address' and 'Postcode' are desirable but optional for display
+    
+    if not all(col in df_chemists.columns for col in required_details_cols):
+        missing_cols = [col for col in required_details_cols if col not in df_chemists.columns]
+        app.logger.error(f"Chemist details file is missing critical columns: {', '.join(missing_cols)}")
+        flash(f"Error: Chemist details file is missing critical columns: {', '.join(missing_cols)}. Dropdown may not populate correctly.", "danger")
+        return [] # If critical ID or Name is missing, don't proceed
+
+    dropdown_list = []
+    for index, row in df_chemists.iterrows():
+        try:
+            chemist_id = int(pd.to_numeric(row['Chemist ID'], errors='coerce'))
+            name = str(row.get('Name', 'N/A')).strip()
+            # Get Full Address and Postcode, defaulting to 'N/A' if missing or NaN
+            full_address = str(row.get('Full Address', 'N/A')).strip()
+            if pd.isna(row.get('Full Address')) or not full_address: # Handle NaN or empty string for address
+                full_address = "Address N/A"
+
+            postcode = str(row.get('Postcode', 'N/A')).strip()
+            if pd.isna(row.get('Postcode')) or not postcode: # Handle NaN or empty string for postcode
+                postcode = "Postcode N/A"
+
+            # Construct the display text
+            display_text_parts = [str(chemist_id), name]
+            if full_address and full_address != "Address N/A":
+                display_text_parts.append(full_address)
+            if postcode and postcode != "Postcode N/A":
+                display_text_parts.append(postcode)
+            
+            display_text = " - ".join(filter(None, display_text_parts)) # Filter out any None or empty parts before joining
+
+            dropdown_list.append({'id': chemist_id, 'display_text': display_text})
+        except ValueError: # For pd.to_numeric or int() conversion
+            app.logger.warning(f"Skipping chemist due to invalid Chemist ID format: {row.get('Chemist ID')}")
+        except Exception as e:
+            app.logger.error(f"Error processing row for dropdown: {row}, Error: {e}")
+            
+    dropdown_list = sorted(dropdown_list, key=lambda x: x['id'])
+    return dropdown_list
+
 
 def process_one_chemist_data(df_full, chemist_id):
     df_full_copy = df_full.copy()
@@ -95,56 +137,35 @@ def process_and_aggregate_data(df_input, chemist_id1, chemist_id2=None):
     if not all(col in df_input.columns for col in required_cols):
         missing = [col for col in required_cols if col not in df_input.columns]
         app.logger.error(f"Input DataFrame is missing required columns: {', '.join(missing)}")
-        flash(f"Error: Merged data is missing required columns: {', '.join(missing)}. Please ensure 'Chemist', 'Year', 'Month', 'Number of Items' are present.", "danger")
+        flash(f"Error: Merged dispensing data is missing required columns: {', '.join(missing)}. Please ensure 'Chemist', 'Year', 'Month', 'Number of Items' are present.", "danger")
         return pd.DataFrame(), "single"
 
     df_clean = df_input.copy()
 
     df_c1 = process_one_chemist_data(df_clean, chemist_id1)
     if df_c1.empty:
-        flash(f"No data found for Chemist {chemist_id1}.", "info")
+        flash(f"No dispensing data found for Chemist {chemist_id1}.", "info")
         return pd.DataFrame(), "single" 
 
     if chemist_id2 is None or chemist_id1 == chemist_id2:
         app.logger.info(f"Processing complete for single Chemist ID: {chemist_id1}")
-        # For single view, ensure the column names are standard for the template
-        df_c1_display = df_c1.rename(columns={
-            'Total Items': f'Total Items C{int(float(chemist_id1))}',
-            'Rolling 12m Avg Items': f'Rolling Avg C{int(float(chemist_id1))}'
-        })
-        return df_c1_display, "single" # Return the renamed df for consistency if needed by template
-        # Actually, for single view, the original column names from process_one_chemist_data are fine.
-        # The template for single view might expect 'Total Items' and 'Rolling 12m Avg Items'
-        # Let's return df_c1 directly for single view and handle renaming only for comparison.
-        # However, results.html expects dynamic names based on view_type.
-        # So, for single view, we should still provide specific names if the template expects it.
-        # Let's simplify: the results template can just display columns as they are.
-        # The renaming to "Total Items C..." is primarily for the comparison case.
-        # For single view, the 'Chemist' column is already in df_c1.
-        # The results.html template uses chemist_id_display for the title, which is fine.
-        # The table data will just render the columns from df_c1.
-        # Let's ensure df_c1 for single view has clear column names if they differ from comparison.
-        # The current `process_one_chemist_data` returns: 'Chemist', 'Year', 'Month', 'Total Items', 'Rolling 12m Avg Items'
-        # This is fine for single view.
-
-        return df_c1, "single" # Return df_c1 as is for single view.
+        return df_c1, "single"
     else:
         app.logger.info(f"Processing data for second Chemist ID: {chemist_id2} for comparison.")
         df_c2 = process_one_chemist_data(df_clean, chemist_id2)
 
         if df_c2.empty:
-            flash(f"No data found for the second Chemist {chemist_id2}. Displaying data for Chemist {chemist_id1} only.", "info")
+            flash(f"No dispensing data found for the second Chemist {chemist_id2}. Displaying data for Chemist {chemist_id1} only.", "info")
             return df_c1, "single" 
 
         c1_id_int = int(float(chemist_id1))
         c2_id_int = int(float(chemist_id2))
 
-        # Define column names for clarity
         c1_items_col_name = f'Items C{c1_id_int}'
         c1_rolling_col_name = f'Rolling Avg C{c1_id_int}'
         c2_items_col_name = f'Items C{c2_id_int}'
         c2_rolling_col_name = f'Rolling Avg C{c2_id_int}'
-        separator_col_name = ' ' # A single space for the column name
+        separator_col_name = ' ' 
 
         df_c1_renamed = df_c1.rename(columns={
             'Total Items': c1_items_col_name,
@@ -158,48 +179,38 @@ def process_and_aggregate_data(df_input, chemist_id1, chemist_id2=None):
 
         comparison_df = pd.merge(df_c1_renamed, df_c2_renamed, on=['Year', 'Month'], how='outer')
         
-        # Add the separator column
-        comparison_df[separator_col_name] = '' # Fill with empty strings
+        comparison_df[separator_col_name] = '' 
 
-        # Define the desired column order for display
         display_columns = ['Year', 'Month', 
                            c1_items_col_name, c1_rolling_col_name, 
                            separator_col_name, 
                            c2_items_col_name, c2_rolling_col_name]
         
-        # Ensure all display columns exist, fill with NA if some merge resulted in missing data for a C1/C2
         for col in display_columns:
             if col not in comparison_df.columns:
-                comparison_df[col] = pd.NA # Or appropriate fill value like 0 or ''
+                comparison_df[col] = pd.NA 
 
-        comparison_df = comparison_df[display_columns] # Reorder and select
+        comparison_df = comparison_df[display_columns] 
         comparison_df = comparison_df.sort_values(by=['Year', 'Month']).reset_index(drop=True)
         
-        # These ID columns are not for display but can be useful if we decide to keep them for download
-        # comparison_df['Chemist1_ID_Internal'] = c1_id_int 
-        # comparison_df['Chemist2_ID_Internal'] = c2_id_int
-
         app.logger.info(f"Comparison data generated for Chemist {c1_id_int} and Chemist {c2_id_int}.")
         return comparison_df, "comparison"
 
 # --- Flask Routes ---
 @app.route('/', methods=['GET'])
 def index():
-    consolidated_data = load_single_csv_file(INPUT_CSV_FILE_PATH) 
-    if consolidated_data.empty and not os.path.exists(INPUT_CSV_FILE_PATH):
-        return render_template('index.html', unique_chemists=[])
-    elif consolidated_data.empty and os.path.exists(INPUT_CSV_FILE_PATH):
-        if not flash_is_pending(): 
-             flash("Could not load data to populate chemist dropdown. The CSV file might be empty or improperly formatted.", "warning")
-        return render_template('index.html', unique_chemists=[])
-
-    unique_chemists = get_unique_chemist_ids(consolidated_data)
-    if not unique_chemists and not consolidated_data.empty: 
-        flash("No chemist IDs could be extracted. The 'Chemist' column might be missing or empty in the CSV file.", "warning")
-    return render_template('index.html', unique_chemists=unique_chemists)
+    """Serves the main page with the form."""
+    chemist_dropdown_data = get_chemist_details_for_dropdown(CHEMIST_DETAILS_CSV_PATH)
+    
+    if not chemist_dropdown_data:
+        if not flash_is_pending():
+            flash("Could not populate chemist selection. Please check the chemist details file (formatted_chemist_list.csv).", "warning")
+            
+    return render_template('index.html', chemist_options=chemist_dropdown_data)
 
 @app.route('/process', methods=['POST'])
 def process_data_route():
+    """Handles form submission, processes data, and then shows it or allows download."""
     try:
         y_input = request.form.get('y_input', 'ALL_Data') 
         str_chemist_input_1 = request.form.get('chemist_number_1')
@@ -227,11 +238,11 @@ def process_data_route():
         flash(f"Error processing your request: {e}", "danger")
         return redirect(url_for('index'))
 
-    consolidated_data = load_single_csv_file(INPUT_CSV_FILE_PATH) 
-    if consolidated_data.empty:
+    dispensing_data = load_csv_data(INPUT_DATA_CSV_FILE_PATH, file_description="Dispensing Data") 
+    if dispensing_data.empty:
         return redirect(url_for('index'))
 
-    processed_df, view_type = process_and_aggregate_data(consolidated_data, chemist_filter_number_1, chemist_filter_number_2)
+    processed_df, view_type = process_and_aggregate_data(dispensing_data, chemist_filter_number_1, chemist_filter_number_2)
 
     if not processed_df.empty:
         c1_id_for_filename = int(float(chemist_filter_number_1))
@@ -243,14 +254,7 @@ def process_data_route():
         else: 
             output_filename = f'Chemist{c1_id_for_filename}_FilteredData_{y_input.replace(" ", "_")}.xlsx'
             title_chemist_id_display = str(c1_id_for_filename)
-            # For single view, ensure the columns passed to to_html are standard
-            # processed_df might need renaming if process_one_chemist_data returns generic names
-            # Current process_one_chemist_data returns: 'Chemist', 'Year', 'Month', 'Total Items', 'Rolling 12m Avg Items'
-            # This is fine.
 
-        # For comparison view, processed_df already has the specific column order including the separator
-        # For single view, processed_df has 'Chemist', 'Year', 'Month', 'Total Items', 'Rolling 12m Avg Items'
-        # The to_html will render these as is.
         data_html_table = processed_df.to_html(classes='data-table table table-striped table-hover', index=False, border=0, escape=False)
         
         session['processed_data'] = processed_df.to_dict('records') 

@@ -22,7 +22,7 @@
             border-radius: 12px;
             box-shadow: 0 8px 16px rgba(0, 0, 0, 0.1);
             width: 100%;
-            max-width: 550px; /* Slightly wider for two dropdowns */
+            max-width: 600px; /* Adjusted width for longer dropdown text */
             margin-top: 20px;
         }
         h1 {
@@ -44,7 +44,7 @@
             margin-bottom: 20px;
             border: 1px solid #ccc;
             border-radius: 6px;
-            box-sizing: border-box; /* Important for padding and width */
+            box-sizing: border-box; 
             font-size: 1em;
             background-color: #fdfdfd;
         }
@@ -68,7 +68,7 @@
             padding: 0;
             margin-bottom: 20px;
             width: 100%;
-            max-width: 550px; /* Match container width */
+            max-width: 600px; /* Match container width */
         }
         .flash-messages li {
             padding: 10px 15px;
@@ -105,12 +105,12 @@
                 <label for="chemist_number_1">Select Chemist 1:</label>
                 <select name="chemist_number_1" id="chemist_number_1" required>
                     <option value="" disabled selected>-- Select Chemist 1 --</option>
-                    {% if unique_chemists %}
-                        {% for chemist in unique_chemists %}
-                            <option value="{{ chemist }}">{{ chemist }}</option>
+                    {% if chemist_options %}
+                        {% for chemist_detail in chemist_options %}
+                            <option value="{{ chemist_detail.id }}">{{ chemist_detail.display_text }}</option>
                         {% endfor %}
                     {% else %}
-                        <option value="" disabled>No chemist IDs available from data file</option>
+                        <option value="" disabled>Chemist list unavailable</option>
                     {% endif %}
                 </select>
             </div>
@@ -118,12 +118,12 @@
                 <label for="chemist_number_2">Select Chemist 2 (Optional for Comparison):</label>
                 <select name="chemist_number_2" id="chemist_number_2">
                     <option value="">-- None (Single Chemist View) --</option>
-                    {% if unique_chemists %}
-                        {% for chemist in unique_chemists %}
-                            <option value="{{ chemist }}">{{ chemist }}</option>
+                    {% if chemist_options %}
+                        {% for chemist_detail in chemist_options %}
+                            <option value="{{ chemist_detail.id }}">{{ chemist_detail.display_text }}</option>
                         {% endfor %}
                     {% else %}
-                        <option value="" disabled>No chemist IDs available from data file</option>
+                        <option value="" disabled>Chemist list unavailable</option>
                     {% endif %}
                 </select>
             </div>
