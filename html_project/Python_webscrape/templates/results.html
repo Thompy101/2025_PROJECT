@@ -21,7 +21,7 @@
             border-radius: 12px;
             box-shadow: 0 8px 16px rgba(0, 0, 0, 0.1);
             width: 100%;
-            max-width: 1200px; /* Wider for comparison table */
+            max-width: 1200px; 
             margin-top: 20px; 
         }
         h1 {
@@ -64,24 +64,11 @@
             background-color: #e2e6ea;
         }
         
-        /* Style for the separator line */
-        /* This targets the 4th header (Chemist 1 Rolling Avg) and its data cells */
         .data-table th:nth-child(4),
         .data-table td:nth-child(4) {
             border-right: 2px solid black; 
         }
-        /* If the separator column itself has a header ' ' and you want to hide it */
-        .data-table th:nth-child(5) { /* Assuming separator is 5th column */
-             /* visibility: hidden; or font-size: 0; or color: white; if header is ' ' */
-        }
-        .data-table td:nth-child(5) { /* Assuming separator is 5th column */
-            /* You can make this column very narrow if it's just for spacing */
-            /* width: 10px; */
-            /* border-left: none; */
-            /* border-right: none; */
-        }
-
-
+        
         .table-responsive {
             overflow-x: auto; 
             max-height: 60vh; 
@@ -157,9 +144,7 @@
             {% else %}
                 Chemist ID: {{ chemist_id_display }}
             {% endif %}
-            <br>
-            <span style="font-size:0.8em; color: #777;">Filename Reference: {{ filename_ref }}</span>
-        </h2>
+            </h2>
 
         {% if table_data and table_data != "<table>\n</table>" and table_data != "<table border=\"0\" class=\"dataframe data-table table table-striped table-hover\">\n</table>" %}
             <div class="table-responsive">
