@@ -11,6 +11,9 @@
             padding: 20px;
             background-color: #f4f7f6;
             color: #333;
+            display: flex; /* For centering flash messages and container */
+            flex-direction: column;
+            align-items: center;
         }
         .container {
             background-color: #fff;
@@ -18,30 +21,41 @@
             border-radius: 12px;
             box-shadow: 0 8px 16px rgba(0, 0, 0, 0.1);
             width: 100%;
-            max-width: 900px; /* Wider for table */
-            margin: 20px auto;
+            max-width: 1100px; /* Wider for potentially more columns */
+            margin-top: 20px; /* Space below flash messages */
         }
         h1 {
             color: #2c3e50;
             text-align: center;
-            margin-bottom: 25px;
+            margin-bottom: 10px;
             font-size: 1.8em;
+        }
+        h2.subtitle {
+            color: #555;
+            text-align: center;
+            margin-bottom: 25px;
+            font-size: 1.1em;
+            font-weight: normal;
         }
         .data-table {
             width: 100%;
             border-collapse: collapse;
             margin-bottom: 25px;
-            font-size: 0.9em;
+            font-size: 0.85em; /* Slightly smaller for more data */
         }
         .data-table th, .data-table td {
             border: 1px solid #ddd;
-            padding: 10px 12px;
+            padding: 8px 10px; /* Adjusted padding */
             text-align: left;
+            white-space: nowrap; /* Prevent text wrapping in cells */
         }
         .data-table th {
             background-color: #e9ecef;
             color: #495057;
             font-weight: 600;
+            position: sticky; /* Make headers sticky */
+            top: 0; /* Stick to the top of the scrollable container */
+            z-index: 10;
         }
         .data-table tr:nth-child(even) {
             background-color: #f8f9fa;
@@ -49,12 +63,17 @@
         .data-table tr:hover {
             background-color: #e2e6ea;
         }
+        .table-responsive {
+            overflow-x: auto; /* Allow horizontal scrolling for wide tables */
+            max-height: 60vh; /* Limit table height and make it scrollable vertically */
+            margin-bottom: 20px;
+        }
         .action-links {
             text-align: center;
             margin-top: 20px;
             margin-bottom: 20px;
         }
-        .action-links a, .action-links button {
+        .action-links a, .action-links button { /* Ensure button styling matches link styling */
             display: inline-block;
             margin: 0 10px;
             padding: 10px 18px;
@@ -63,12 +82,12 @@
             font-size: 1em;
             font-weight: 600;
             transition: background-color 0.3s ease, color 0.3s ease;
+            border: none; /* For button consistency */
+            cursor: pointer; /* For button consistency */
         }
         .download-button {
             background-color: #28a745;
             color: white;
-            border: none;
-            cursor: pointer;
         }
         .download-button:hover {
             background-color: #218838;
@@ -80,17 +99,20 @@
         .back-button:hover {
             background-color: #5a6268;
         }
-        /* Flash messages styling (same as index.html for consistency) */
+        /* Flash messages styling */
         .flash-messages {
             list-style-type: none;
             padding: 0;
             margin-bottom: 20px;
+            width: 100%;
+            max-width: 1100px; /* Match container width */
         }
         .flash-messages li {
             padding: 10px 15px;
             margin-bottom: 10px;
             border-radius: 6px;
             font-size: 0.95em;
+            text-align: center;
         }
         .flash-danger { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
         .flash-warning { background-color: #fff3cd; color: #856404; border: 1px solid #ffeeba; }
@@ -99,29 +121,36 @@
     </style>
 </head>
 <body>
+    {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+            <ul class="flash-messages">
+            {% for category, message in messages %}
+                <li class="flash-{{ category }}">{{ message }}</li>
+            {% endfor %}
+            </ul>
+        {% endif %}
+    {% endwith %}
+
     <div class="container">
-        <h1>Filtered Data for Chemist {{ chemist_id }}</h1>
-        <p style="text-align: center; margin-bottom: 20px;">Filename Reference: {{ filename_ref }}</p>
-
-        {% with messages = get_flashed_messages(with_categories=true) %}
-            {% if messages %}
-                <ul class="flash-messages">
-                {% for category, message in messages %}
-                    <li class="flash-{{ category }}">{{ message }}</li>
-                {% endfor %}
-                </ul>
+        <h1>Filtered Data</h1>
+        <h2 class="subtitle">
+            {% if view_type == "comparison" %}
+                Comparison for Chemists {{ chemist_id_display }}
+            {% else %}
+                Chemist ID: {{ chemist_id_display }}
             {% endif %}
-        {% endwith %}
+            <br>
+            <span style="font-size:0.8em; color: #777;">Filename Reference: {{ filename_ref }}</span>
+        </h2>
 
-        {% if table_data %}
-            <div class="table-responsive">
+        {% if table_data and table_data != "<table>\n</table>" and table_data != "<table border=\"0\" class=\"dataframe data-table table table-striped table-hover\">\n</table>" %} <div class="table-responsive">
                 {{ table_data|safe }}
             </div>
             <div class="action-links">
-                <a href="{{ url_for('download_excel') }}" class="download-button">Download as Excel</a>
+                <a href="{{ url_for('download_excel') }}" class="download-button">Download as Excel ({{ download_filename }})</a>
             </div>
         {% else %}
-            <p style="text-align: center;">No data available to display for the selected criteria.</p>
+            <p style="text-align: center;">No data available to display for the selected criteria, or the data processing resulted in an empty table.</p>
         {% endif %}
 
         <div class="action-links">

@@ -3,33 +3,51 @@ import pandas as pd
 from flask import Flask, render_template, request, send_file, redirect, url_for, flash, session
 import io # For sending file in memory
 import logging
+import time # For potential timing, though not strictly used in this version
 
 # --- Flask App Initialization ---
 app = Flask(__name__)
-app.secret_key = 'your_very_secret_key_for_session_and_flash' # Important for flashing messages and session
+app.secret_key = 'your_very_secret_key_for_session_and_flash_bso_analyzer' # Unique secret key
 
 # --- Configuration ---
-# Path to the single merged CSV file
-# IMPORTANT: Ensure this path is correct and accessible by the Flask app.
-# Example: INPUT_CSV_FILE_PATH = os.path.join(os.path.dirname(__file__), 'data', 'merged_bso_dispensing_data.csv')
-INPUT_CSV_FILE_PATH = r"C:\Users\Andrew\OneDrive\Documents\2025_PROJECT\2025_PROJECT\html_project\Python_webscrape\Webscrape Data\merged_bso_dispensing_data.csv" # Please ensure this path is correct for your system
+# Path to the single merged CSV file (output of your scraper script)
+INPUT_CSV_FILE_PATH = r"D:\Data2\merged_bso_dispensing_data.csv" # Ensure this path is correct
 
-# --- Helper Functions (Adapted from your script) ---
+# --- Helper Functions ---
 def load_single_csv_file(file_path):
-    """Reads a single CSV file into a pandas DataFrame."""
-    app.logger.info(f"Attempting to load data from: {file_path}")
+    """Reads a single CSV file into a pandas DataFrame, trying common encodings."""
+    app.logger.info(f"Attempting to load data from CSV file: {file_path}")
     if not os.path.exists(file_path):
         app.logger.error(f"Input CSV file not found at {file_path}")
-        flash(f"Error: Input CSV file not found at {file_path}", "danger")
+        flash(f"Error: Input CSV file not found at {file_path}. Please run the scraper script first.", "danger")
         return pd.DataFrame()
-    try:
-        df = pd.read_csv(file_path)
-        app.logger.info(f"Successfully loaded CSV: {os.path.basename(file_path)}")
-        return df
-    except Exception as e:
-        app.logger.error(f"Error reading CSV file {file_path}: {e}")
-        flash(f"Error reading CSV file: {e}", "danger")
-        return pd.DataFrame()
+
+    encodings_to_try = ['utf-8', 'latin1', 'cp1252'] # Common encodings
+    df = None
+
+    for encoding in encodings_to_try:
+        try:
+            app.logger.info(f"Trying to read CSV with encoding: {encoding}")
+            df = pd.read_csv(file_path, encoding=encoding)
+            app.logger.info(f"Successfully loaded CSV: {os.path.basename(file_path)} with encoding: {encoding}. Shape: {df.shape if df is not None else 'None'}")
+            return df # Return as soon as a successful encoding is found
+        except UnicodeDecodeError:
+            app.logger.warning(f"Failed to decode {os.path.basename(file_path)} with encoding: {encoding}")
+        except pd.errors.EmptyDataError:
+            app.logger.warning(f"CSV file {file_path} is empty (encoding: {encoding}).")
+            flash(f"Warning: The CSV data file '{os.path.basename(file_path)}' appears to be empty.", "warning")
+            return pd.DataFrame() # Return empty if file is empty
+        except Exception as e:
+            app.logger.error(f"Error reading CSV file {file_path} with encoding {encoding}: {e}")
+            # Don't flash for every encoding attempt, flash once if all fail
+            # flash(f"Error reading CSV file (encoding {encoding}): {e}", "danger")
+            # return pd.DataFrame() # Don't return yet, try other encodings
+
+    # If all encodings failed
+    app.logger.error(f"Failed to decode {os.path.basename(file_path)} with all attempted encodings: {encodings_to_try}")
+    flash(f"Error: Could not decode the CSV file with common encodings. Please check the file format.", "danger")
+    return pd.DataFrame()
+
 
 def get_unique_chemist_ids(df):
     """Extracts unique, sorted chemist IDs from the DataFrame."""
@@ -46,102 +64,153 @@ def get_unique_chemist_ids(df):
         flash(f"Could not extract chemist IDs from the data: {e}", "warning")
         return []
 
-def process_and_aggregate_data(df, chemist_id):
-    """
-    Filters data for a specific chemist and aggregates total items by year and month.
-    """
-    if df.empty:
-        app.logger.warning("Input DataFrame is empty for processing.")
+def process_one_chemist_data(df_full, chemist_id):
+    """Processes data for a single chemist, including rolling average."""
+    # Work on a copy to avoid modifying the original df passed around
+    df_full_copy = df_full.copy()
+    # Ensure 'Chemist' column is numeric for filtering
+    df_full_copy['Chemist'] = pd.to_numeric(df_full_copy['Chemist'], errors='coerce')
+    
+    # Filter by the specific chemist ID (ensure chemist_id is also numeric)
+    df_chemist = df_full_copy[df_full_copy['Chemist'] == float(chemist_id)].copy()
+
+    if df_chemist.empty:
+        app.logger.info(f"No data found for Chemist ID: {chemist_id} after initial filtering.")
         return pd.DataFrame()
 
-    required_cols = ['Chemist', 'Year', 'Month', 'Number of Items']
-    if not all(col in df.columns for col in required_cols):
-        missing = [col for col in required_cols if col not in df.columns]
+    # Ensure 'Year', 'Month', and 'Number of Items' are in appropriate formats
+    df_chemist.loc[:, 'Year'] = pd.to_numeric(df_chemist['Year'], errors='coerce').fillna(0).astype(int)
+    df_chemist.loc[:, 'Month'] = pd.to_numeric(df_chemist['Month'], errors='coerce').fillna(0).astype(int)
+    df_chemist.loc[:, 'Number of Items'] = pd.to_numeric(df_chemist['Number of Items'], errors='coerce').fillna(0)
+    
+    # Filter out rows with invalid Year or Month
+    df_chemist = df_chemist[(df_chemist['Year'] > 0) & (df_chemist['Month'] >= 1) & (df_chemist['Month'] <= 12)].copy()
+
+    if df_chemist.empty:
+        app.logger.info(f"No valid Year/Month data for Chemist ID: {chemist_id} after type conversion.")
+        return pd.DataFrame()
+
+    app.logger.info(f"Aggregating data for Chemist ID: {chemist_id}")
+    aggregated_df = df_chemist.groupby(['Year', 'Month'])['Number of Items'].sum().reset_index()
+    aggregated_df = aggregated_df.rename(columns={'Number of Items': 'Total Items'})
+    
+    # Sort by Year and Month BEFORE calculating rolling average
+    aggregated_df = aggregated_df.sort_values(by=['Year', 'Month']).reset_index(drop=True)
+
+    # Calculate rolling 12-month average for 'Total Items'
+    aggregated_df['Rolling 12m Avg Items'] = aggregated_df['Total Items'].rolling(window=12, min_periods=1).mean().round(2)
+    
+    aggregated_df['Chemist'] = chemist_id # Use the original chemist_id for this column
+    
+    return aggregated_df[['Chemist', 'Year', 'Month', 'Total Items', 'Rolling 12m Avg Items']]
+
+
+def process_and_aggregate_data(df_input, chemist_id1, chemist_id2=None):
+    """
+    Prepares data for one or two chemists.
+    If two chemist_ids are provided, their data is merged for comparison.
+    """
+    if df_input.empty:
+        app.logger.warning("Input DataFrame is empty for processing.")
+        return pd.DataFrame(), "single" # Return type indicator
+
+    required_cols = ['Chemist', 'Year', 'Month', 'Number of Items'] # These are from COLUMNS_TO_KEEP in scraper
+    if not all(col in df_input.columns for col in required_cols):
+        missing = [col for col in required_cols if col not in df_input.columns]
         app.logger.error(f"Input DataFrame is missing required columns: {', '.join(missing)}")
         flash(f"Error: Merged data is missing required columns: {', '.join(missing)}. Please ensure 'Chemist', 'Year', 'Month', 'Number of Items' are present.", "danger")
-        return pd.DataFrame()
+        return pd.DataFrame(), "single"
 
-    try:
-        # Ensure 'Chemist' column is of a numeric type for comparison
-        df.loc[:, 'Chemist'] = pd.to_numeric(df['Chemist'], errors='coerce')
-        # Create a copy to avoid SettingWithCopyWarning when modifying
-        df_filtered = df.dropna(subset=['Chemist']).copy()
+    # The 'Chemist' column is converted to numeric within process_one_chemist_data on a copy
+    # df_clean = df_input.dropna(subset=['Chemist']).copy() # Initial dropna based on original 'Chemist' column
+    df_clean = df_input.copy() # Work with a copy of the input
+
+    # Process data for the first chemist
+    df_c1 = process_one_chemist_data(df_clean, chemist_id1)
+    if df_c1.empty:
+        flash(f"No data found for Chemist {chemist_id1}.", "info")
+        return pd.DataFrame(), "single" 
+
+    if chemist_id2 is None or chemist_id1 == chemist_id2:
+        app.logger.info(f"Processing complete for single Chemist ID: {chemist_id1}")
+        return df_c1, "single"
+    else:
+        # Process data for the second chemist
+        app.logger.info(f"Processing data for second Chemist ID: {chemist_id2} for comparison.")
+        df_c2 = process_one_chemist_data(df_clean, chemist_id2)
+
+        if df_c2.empty:
+            flash(f"No data found for the second Chemist {chemist_id2}. Displaying data for Chemist {chemist_id1} only.", "info")
+            return df_c1, "single" # Fallback to single view if C2 has no data
+
+        # Prepare for merge: Use original chemist_id for column renaming
+        # Ensure IDs are integers for cleaner column names
+        c1_id_int = int(float(chemist_id1))
+        c2_id_int = int(float(chemist_id2))
+
+        df_c1_renamed = df_c1.rename(columns={
+            'Total Items': f'Total Items C{c1_id_int}',
+            'Rolling 12m Avg Items': f'Rolling Avg C{c1_id_int}'
+        }).drop(columns=['Chemist'])
+
+        df_c2_renamed = df_c2.rename(columns={
+            'Total Items': f'Total Items C{c2_id_int}',
+            'Rolling 12m Avg Items': f'Rolling Avg C{c2_id_int}'
+        }).drop(columns=['Chemist'])
+
+        # Merge the two dataframes
+        comparison_df = pd.merge(df_c1_renamed, df_c2_renamed, on=['Year', 'Month'], how='outer')
+        comparison_df = comparison_df.sort_values(by=['Year', 'Month']).reset_index(drop=True)
         
-        # Filter by the specific chemist ID (ensure chemist_id is also numeric)
-        df_filtered = df_filtered[df_filtered['Chemist'] == float(chemist_id)].copy() # Compare as float for safety
+        # Add original chemist IDs for reference, could be useful in template
+        comparison_df['Chemist1_ID'] = c1_id_int
+        comparison_df['Chemist2_ID'] = c2_id_int
 
-        if df_filtered.empty:
-            app.logger.info(f"No data found for Chemist ID: {chemist_id} after initial filtering.")
-            flash(f"No data found for Chemist ID: {chemist_id}.", "info")
-            return pd.DataFrame()
-
-        # Ensure 'Year', 'Month', and 'Number of Items' are in appropriate formats
-        df_filtered.loc[:, 'Year'] = pd.to_numeric(df_filtered['Year'], errors='coerce').fillna(0).astype(int)
-        df_filtered.loc[:, 'Month'] = pd.to_numeric(df_filtered['Month'], errors='coerce').fillna(0).astype(int)
-        df_filtered.loc[:, 'Number of Items'] = pd.to_numeric(df_filtered['Number of Items'], errors='coerce').fillna(0)
-
-        # Filter out rows with invalid Year or Month (e.g., 0)
-        df_filtered = df_filtered[(df_filtered['Year'] > 0) & (df_filtered['Month'] >= 1) & (df_filtered['Month'] <= 12)].copy()
-
-        if df_filtered.empty:
-            app.logger.info("No valid Year/Month data found after filtering and data type conversion.")
-            flash("No valid Year/Month data found after type conversion and filtering.", "info")
-            return pd.DataFrame()
-
-        app.logger.info(f"Aggregating data for Chemist ID: {chemist_id}")
-        # Group by Year and Month and sum 'Number of Items'
-        aggregated_df = df_filtered.groupby(['Year', 'Month'])['Number of Items'].sum().reset_index()
-
-        # Rename the aggregated column for clarity
-        aggregated_df = aggregated_df.rename(columns={'Number of Items': 'Total Items'})
-
-        # Add the Chemist ID column back
-        aggregated_df['Chemist'] = chemist_id # Store as originally passed
-
-        # Sort by Year and Month for chronological order
-        aggregated_df = aggregated_df.sort_values(by=['Year', 'Month']).reset_index(drop=True)
-        app.logger.info("Aggregation complete.")
-        # Reorder columns for the final output
-        return aggregated_df[['Chemist', 'Year', 'Month', 'Total Items']]
-    except Exception as e:
-        app.logger.error(f"Error during data processing for chemist {chemist_id}: {e}")
-        flash(f"An error occurred during data processing: {e}", "danger")
-        return pd.DataFrame()
+        app.logger.info(f"Comparison data generated for Chemist {c1_id_int} and Chemist {c2_id_int}.")
+        return comparison_df, "comparison"
 
 # --- Flask Routes ---
 @app.route('/', methods=['GET'])
 def index():
     """Serves the main page with the form."""
-    # Load data to populate chemist dropdown
-    consolidated_data = load_single_csv_file(INPUT_CSV_FILE_PATH)
+    consolidated_data = load_single_csv_file(INPUT_CSV_FILE_PATH) 
     if consolidated_data.empty and not os.path.exists(INPUT_CSV_FILE_PATH):
-         # If file not found, flash message is already handled by load_single_csv_file
+        # Flash message handled by load_single_csv_file
         return render_template('index.html', unique_chemists=[])
     elif consolidated_data.empty and os.path.exists(INPUT_CSV_FILE_PATH):
-        # File exists but might be empty or unreadable for chemist IDs
-        flash("Could not load data to populate chemist dropdown. The CSV might be empty or improperly formatted.", "warning")
+        # Flash message handled by load_single_csv_file if it fails to decode or read,
+        # or if it's empty.
+        if not flash_is_pending(): # Add a generic one if load_single_csv_file didn't flash
+             flash("Could not load data to populate chemist dropdown. The CSV file might be empty or improperly formatted.", "warning")
         return render_template('index.html', unique_chemists=[])
 
-
     unique_chemists = get_unique_chemist_ids(consolidated_data)
-    if not unique_chemists and not consolidated_data.empty:
-        flash("No chemist IDs could be extracted. The 'Chemist' column might be missing or empty in the CSV.", "warning")
-
+    if not unique_chemists and not consolidated_data.empty: 
+        flash("No chemist IDs could be extracted. The 'Chemist' column might be missing or empty in the CSV file.", "warning")
     return render_template('index.html', unique_chemists=unique_chemists)
 
 @app.route('/process', methods=['POST'])
 def process_data_route():
     """Handles form submission, processes data, and then shows it or allows download."""
     try:
-        y_input = request.form.get('y_input', 'ALL_Data')
-        str_chemist_input = request.form.get('chemist_number') # This will be a string from the form
+        y_input = request.form.get('y_input', 'ALL_Data') # Used for output filename
+        str_chemist_input_1 = request.form.get('chemist_number_1')
+        str_chemist_input_2 = request.form.get('chemist_number_2') # Can be empty string
 
-        if not str_chemist_input:
-            flash("Please select a Chemist number.", "warning")
+        if not str_chemist_input_1:
+            flash("Please select Chemist 1.", "warning")
             return redirect(url_for('index'))
 
-        # Convert the chemist number from form (string) to an integer for processing
-        chemist_filter_number = int(str_chemist_input) 
+        chemist_filter_number_1 = int(str_chemist_input_1)
+        chemist_filter_number_2 = None
+        if str_chemist_input_2 and str_chemist_input_2.isdigit(): # Check if it's a digit string
+            chemist_filter_number_2 = int(str_chemist_input_2)
+            if chemist_filter_number_1 == chemist_filter_number_2:
+                flash("Please select two different chemists for comparison, or leave Chemist 2 blank for a single view.", "info")
+                chemist_filter_number_2 = None # Treat as single view if same
+        elif str_chemist_input_2: # If it's not empty but not a digit (e.g. the "" from "-- None --")
+             chemist_filter_number_2 = None
+
     except ValueError:
         flash("Invalid Chemist number selected. Ensure it's a whole number.", "danger")
         return redirect(url_for('index'))
@@ -150,35 +219,41 @@ def process_data_route():
         flash(f"Error processing your request: {e}", "danger")
         return redirect(url_for('index'))
 
-    consolidated_data = load_single_csv_file(INPUT_CSV_FILE_PATH)
+    consolidated_data = load_single_csv_file(INPUT_CSV_FILE_PATH) 
     if consolidated_data.empty:
         # Flash message handled by load_single_csv_file
         return redirect(url_for('index'))
 
-    # Pass the numeric chemist_filter_number to the processing function
-    monthly_totals_df = process_and_aggregate_data(consolidated_data, chemist_filter_number)
+    processed_df, view_type = process_and_aggregate_data(consolidated_data, chemist_filter_number_1, chemist_filter_number_2)
 
-    if not monthly_totals_df.empty:
-        output_filename = f'Chemist{chemist_filter_number}_FilteredData_{y_input.replace(" ", "_")}.xlsx'
+    if not processed_df.empty:
+        # Ensure chemist IDs used in filename are integers for cleaner names
+        c1_id_for_filename = int(float(chemist_filter_number_1))
         
-        # Convert DataFrame to HTML table for display
-        # Add some classes for styling and avoid pandas default index
-        data_html_table = monthly_totals_df.to_html(classes='data-table table table-striped table-hover', index=False, border=0, escape=False)
+        if view_type == "comparison" and chemist_filter_number_2 is not None:
+            c2_id_for_filename = int(float(chemist_filter_number_2))
+            output_filename = f'Compare_C{c1_id_for_filename}_vs_C{c2_id_for_filename}_{y_input.replace(" ", "_")}.xlsx'
+            title_chemist_id_display = f"{c1_id_for_filename} vs {c2_id_for_filename}"
+        else: 
+            output_filename = f'Chemist{c1_id_for_filename}_FilteredData_{y_input.replace(" ", "_")}.xlsx'
+            title_chemist_id_display = str(c1_id_for_filename)
+
+        data_html_table = processed_df.to_html(classes='data-table table table-striped table-hover', index=False, border=0, escape=False)
         
-        # Store DataFrame in session to allow download from results page
-        # For larger DataFrames, consider alternative storage or re-generating on download request
-        session['processed_data'] = monthly_totals_df.to_dict('records') # Store as list of dicts
+        session['processed_data'] = processed_df.to_dict('records') 
         session['output_filename'] = output_filename
+        session['view_type'] = view_type # Store view type for download logic if needed
 
-        app.logger.info(f"Data processed for Chemist {chemist_filter_number}. Rendering results page.")
+        app.logger.info(f"Data processed. Rendering results page for: {title_chemist_id_display}")
         return render_template('results.html', 
                                table_data=data_html_table, 
-                               chemist_id=chemist_filter_number, # Pass the original selected ID for display
+                               chemist_id_display=title_chemist_id_display, 
                                filename_ref=y_input,
-                               download_filename=output_filename)
+                               download_filename=output_filename,
+                               view_type=view_type)
     else:
-        # Flash message should be handled by process_and_aggregate_data
-        if not flash_is_pending(): # Check if a flash message was already set
+        # Flash message should be handled by process_and_aggregate_data if it returned empty
+        if not flash_is_pending(): # Check if a flash message was already set by processing functions
              flash("No data to display or generate Excel file after processing.", "info")
         return redirect(url_for('index'))
 
@@ -187,18 +262,18 @@ def download_excel():
     """Serves the processed data as an Excel file for download."""
     if 'processed_data' in session and 'output_filename' in session:
         try:
-            # Retrieve data from session and convert back to DataFrame
             data_records = session.pop('processed_data', None) # Pop to clear after download
             output_filename = session.pop('output_filename', 'filtered_data.xlsx')
-
+            # view_type = session.pop('view_type', 'single') # Optional: if download needs to know
+            
             if not data_records:
                 flash("No data found to download. Please try filtering again.", "warning")
                 return redirect(url_for('index'))
 
-            monthly_totals_df = pd.DataFrame(data_records)
+            df_to_download = pd.DataFrame(data_records)
             
             excel_buffer = io.BytesIO()
-            monthly_totals_df.to_excel(excel_buffer, index=False, engine='openpyxl')
+            df_to_download.to_excel(excel_buffer, index=False, engine='openpyxl')
             excel_buffer.seek(0) # Reset buffer's position to the beginning
 
             app.logger.info(f"Sending file for download: {output_filename}")
@@ -216,13 +291,11 @@ def download_excel():
         flash("No processed data available for download. Please filter first.", "warning")
         return redirect(url_for('index'))
 
-
 def flash_is_pending():
     """Checks if there are any messages waiting to be flashed."""
     # Accessing session directly like this is generally okay in Flask request context
     # Flask's _flashes is a list of (category, message) tuples.
     return bool(request.environ.get('werkzeug.request') and request.environ['werkzeug.request'].session.get('_flashes'))
-
 
 if __name__ == '__main__':
     # Set up basic logging
