@@ -5,18 +5,25 @@ from urllib.parse import urljoin
 import pandas as pd
 import warnings # For suppressing InsecureRequestWarning
 from urllib3.exceptions import InsecureRequestWarning # For suppressing InsecureRequestWarning
+from google.cloud import storage # Import Google Cloud Storage library
 
 # Suppress only the InsecureRequestWarning caused by verify=False
 warnings.simplefilter('ignore', InsecureRequestWarning)
 
 # --- Configuration ---
 BASE_URL = "https://bso.hscni.net/directorates/operations/family-practitioner-services/directorates-operations-family-practitioner-services-information-unit/general-pharmaceutical-services-and-prescribing-statistics/dispensing-by-contractor/"
-OUTPUT_FOLDER = r"D:\Data2" # Raw string for Windows path
-OUTPUT_FILENAME = "merged_bso_dispensing_data.csv" # Final output will still be CSV as requested
+# OUTPUT_FOLDER = r"D:\Data2" # Removed: Local output folder
+OUTPUT_FILENAME = "merged_bso_dispensing_data.csv"
 COLUMNS_TO_KEEP = ['Practice', 'Chemist', 'Year', 'Month', 'Number of Items'] # Case-sensitive
 
 # Temporary directory to store downloaded XLSX files before merging
-TEMP_DOWNLOAD_DIR = os.path.join(OUTPUT_FOLDER, "temp_bso_xlsxs") # Changed from _csvs to _xlsxs
+# TEMP_DOWNLOAD_DIR = os.path.join(OUTPUT_FOLDER, "temp_bso_xlsxs") # Removed: Local temp dir
+TEMP_DOWNLOAD_DIR = "/tmp/temp_bso_xlsxs" # Use /tmp in Cloud Functions
+
+# Google Cloud Storage Configuration
+BUCKET_NAME = "project-2025-bso-data-storage" # Replace with your GCS bucket name
+# OUTPUT_GCS_PATH = f"bso_data/{OUTPUT_FILENAME}" # Optional: Prefix within the bucket
+OUTPUT_GCS_PATH = OUTPUT_FILENAME # Save directly in the bucket root
 
 def create_directory_if_not_exists(directory_path):
     """Creates a directory if it doesn't already exist."""
@@ -52,15 +59,15 @@ def download_file(file_url, download_path):
         print(f"An unexpected error occurred while downloading {file_url}: {e}")
         return False
 
-def main():
-    """Main function to scrape, download, process, and merge XLSX files."""
-    if not create_directory_if_not_exists(OUTPUT_FOLDER):
+def main(request):
+    """Main function to scrape, download, process, and merge XLSX files and upload to GCS."""
+    if not create_directory_if_not_exists("/tmp"): # Use /tmp for Cloud Functions
         return
     if not create_directory_if_not_exists(TEMP_DOWNLOAD_DIR):
         return
 
     print(f"Attempting to scrape data from: {BASE_URL}")
-    
+
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
     }
@@ -74,20 +81,19 @@ def main():
         return
 
     soup = BeautifulSoup(html_content, 'html.parser')
-    xlsx_links_found = [] # Changed from csv_links_found
+    xlsx_links_found = []
 
     print("Searching for XLSX file links on the page...")
     for link_tag in soup.find_all('a', href=True):
         href = link_tag.get('href', '')
-        
+
         # Look for links ending with .xlsx
-        if href.endswith('.xlsx'): # CHANGED from .csv
-            # print(f"DEBUG: Found a link ending with .xlsx: {href}") # Uncomment for debugging
+        if href.endswith('.xlsx'):
             if ('wp-content/uploads/' in href or 'bso.hscni.net' in href):
                 absolute_file_url = urljoin(BASE_URL, href)
                 if absolute_file_url not in xlsx_links_found:
-                     xlsx_links_found.append(absolute_file_url)
-                     print(f"Found and added potential XLSX link: {absolute_file_url}")
+                    xlsx_links_found.append(absolute_file_url)
+                    print(f"Found and added potential XLSX link: {absolute_file_url}")
 
     if not xlsx_links_found:
         print("No XLSX file links matching all criteria were found on the page.")
@@ -100,8 +106,7 @@ def main():
         file_name = file_url.split('/')[-1].split('?')[0]
         # Ensure filename ends with .xlsx for consistency if query params were present
         if not file_name.lower().endswith('.xlsx'):
-            file_name += ".xlsx" # Append if missing, though unlikely if href.endswith worked
-            
+            file_name += ".xlsx"
         temp_file_path = os.path.join(TEMP_DOWNLOAD_DIR, file_name)
 
         if download_file(file_url, temp_file_path):
@@ -120,19 +125,19 @@ def main():
         try:
             # Read Excel file, typically the first sheet is read by default
             # Ensure 'openpyxl' is installed: pip install openpyxl
-            df_temp = pd.read_excel(file_path, sheet_name=0) # CHANGED from pd.read_csv
+            df_temp = pd.read_excel(file_path, sheet_name=0)
             print(f"Successfully read {os.path.basename(file_path)}.")
-            
+
             if df_temp.empty:
                 print(f"Warning: File {os.path.basename(file_path)} is empty. Skipping.")
-                continue 
+                continue
 
             available_cols_to_keep = [col for col in COLUMNS_TO_KEEP if col in df_temp.columns]
-            
+
             if not available_cols_to_keep:
                 print(f"Warning: None of the desired columns {COLUMNS_TO_KEEP} found in {os.path.basename(file_path)}. Skipping this file.")
                 continue
-            
+
             missing_in_this_file = [col for col in COLUMNS_TO_KEEP if col not in available_cols_to_keep]
             if missing_in_this_file:
                 print(f"Warning: File {os.path.basename(file_path)} is missing columns: {', '.join(missing_in_this_file)}. Only available desired columns will be used.")
@@ -148,7 +153,6 @@ def main():
         except Exception as e: # Catch other pandas or file processing errors
             print(f"Error processing file {file_path}: {e}. Skipping this file.")
 
-
     if not all_dataframes:
         print("No data was successfully processed from any XLSX file. Cannot create merged file.")
         return
@@ -163,19 +167,30 @@ def main():
 
     for col in COLUMNS_TO_KEEP:
         if col not in master_df.columns:
-            master_df[col] = pd.NA 
+            master_df[col] = pd.NA
 
     master_df = master_df[COLUMNS_TO_KEEP]
 
-    output_file_full_path = os.path.join(OUTPUT_FOLDER, OUTPUT_FILENAME)
+    # Output to Google Cloud Storage
     try:
-        master_df.to_csv(output_file_full_path, index=False) # Still saving as CSV
-        print(f"\nSuccessfully saved merged data to: {output_file_full_path}")
+        # Save DataFrame to CSV in memory
+        csv_buffer = master_df.to_csv(index=False, encoding='utf-8')
+
+        # Initialize GCS client
+        client = storage.Client()
+        bucket = client.get_bucket(BUCKET_NAME)
+        blob = bucket.blob(OUTPUT_GCS_PATH)
+
+        # Upload CSV data to GCS
+        blob.upload_from_string(csv_buffer, 'text/csv')
+
+        print(f"\nSuccessfully saved merged data to: gs://{BUCKET_NAME}/{OUTPUT_GCS_PATH}")
         print(f"Merged DataFrame info: {master_df.shape[0]} rows, {master_df.shape[1]} columns.")
         print("First 5 rows of merged data:")
         print(master_df.head())
+
     except Exception as e:
-        print(f"Error saving merged data to CSV file {output_file_full_path}: {e}")
+        print(f"Error saving merged data to Google Cloud Storage: {e}")
 
     # Optional: Clean up temporary downloaded files
     # print("\nCleaning up temporary downloaded files...")

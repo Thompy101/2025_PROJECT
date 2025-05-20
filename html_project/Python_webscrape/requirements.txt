@@ -1,4 +1,6 @@
-Flask
+requests
+beautifulsoup4
 pandas
-gunicorn
-openpyxl # For Excel download functionality
+openpyxl
+google-cloud-storage
+urllib3

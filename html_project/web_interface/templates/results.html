@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Filtered Chemist Data</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f4f7f6;
+            color: #333;
+            display: flex; 
+            flex-direction: column;
+            align-items: center;
+        }
+        .container {
+            background-color: #fff;
+            padding: 30px 40px;
+            border-radius: 12px;
+            box-shadow: 0 8px 16px rgba(0, 0, 0, 0.1);
+            width: 100%;
+            max-width: 1200px; 
+            margin-top: 20px; 
+        }
+        h1 {
+            color: #2c3e50;
+            text-align: center;
+            margin-bottom: 10px;
+            font-size: 1.8em;
+        }
+        h2.subtitle {
+            color: #555;
+            text-align: center;
+            margin-bottom: 25px;
+            font-size: 1.2em;
+        }
+        .table-responsive {
+            overflow-x: auto; /* Allows horizontal scrolling for tables on small screens */
+            margin-bottom: 20px;
+        }
+        .data-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 15px;
+        }
+        .data-table th, .data-table td {
+            border: 1px solid #ddd;
+            padding: 10px;
+            text-align: left;
+        }
+        .data-table th {
+            background-color: #f2f2f2;
+            font-weight: 600;
+            color: #444;
+        }
+        .data-table tr:nth-child(even) {
+            background-color: #f9f9f9;
+        }
+        .data-table tr:hover {
+            background-color: #f1f1f1;
+        }
+        .action-links {
+            text-align: center;
+            margin-top: 20px;
+        }
+        .download-button, .back-button {
+            display: inline-block;
+            background-color: #3498db;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 1em;
+            text-decoration: none;
+            transition: background-color 0.3s ease;
+            margin: 5px;
+        }
+        .download-button:hover, .back-button:hover {
+            background-color: #2980b9;
+        }
+        .flash-messages { list-style-type: none; padding: 0; margin-bottom: 20px; width: 100%; max-width: 1200px; }
+        .flash-messages li { padding: 10px 15px; margin-bottom: 10px; border-radius: 6px; font-size: 0.95em; text-align: center; }
+        .flash-danger { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+        .flash-warning { background-color: #fff3cd; color: #856404; border: 1px solid #ffeeba; }
+        .flash-info { background-color: #d1ecf1; color: #0c5460; border: 1px solid #bee5eb; }
+
+        /* --- New Styles for Comparison View --- */
+        .comparison-container {
+            display: flex;
+            flex-wrap: wrap; /* Allows columns to wrap on smaller screens */
+            justify-content: center;
+            gap: 20px; /* Space between columns */
+            width: 100%;
+        }
+        .comparison-column {
+            flex: 1; /* Allows columns to grow and shrink */
+            min-width: 45%; /* Minimum width before wrapping */
+            max-width: 48%; /* Max width to ensure two columns */
+            padding: 15px;
+            box-sizing: border-box; /* Include padding in width */
+            background-color: #fdfdfd;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        }
+        .comparison-column h3 {
+            text-align: center;
+            color: #34495e;
+            margin-top: 0;
+            margin-bottom: 5px; /* Reduced margin to make space for address */
+            font-size: 1.3em;
+        }
+        .comparison-column .address {
+            text-align: center;
+            font-size: 0.9em;
+            color: #666;
+            margin-bottom: 15px; /* Space after address */
+        }
+        .separator {
+            width: 2px; /* Width of the line */
+            background-color: #333; /* Color of the line */
+            margin: 0 10px; /* Space around the line */
+            align-self: stretch; /* Make it stretch vertically */
+            display: none; /* Hidden by default, shown only on larger screens */
+        }
+
+        /* Show separator only on larger screens when flex-wrap is not active */
+        @media (min-width: 768px) {
+            .separator {
+                display: block;
+            }
+        }
+
+        /* Adjust table width within columns for responsiveness */
+        .comparison-column .data-table {
+            width: 100%; /* Ensure table fills its column */
+        }
+    </style>
+</head>
+<body>
+    {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+            <ul class="flash-messages">
+            {% for category, message in messages %}
+                <li class="flash-{{ category }}">{{ message }}</li>
+            {% endfor %}
+            </ul>
+        {% endif %}
+    {% endwith %}
+
+    <div class="container">
+        <h1>Filtered Data</h1>
+        <h2 class="subtitle">
+            {% if view_type == "comparison" %}
+                Comparison for Chemists {{ chemist_id_display }}
+            {% else %}
+                Chemist ID: {{ chemist_id_display }}
+            {% endif %}
+            </h2>
+
+        {% if table_data or table_data_1 or table_data_2 %} {# Check if any data exists #}
+            {% if view_type == "comparison" %}
+                <div class="comparison-container">
+                    <div class="comparison-column">
+                        <h3>{{ chemist_name_1 }}</h3>
+                        {% if chemist_address_1 %} {# Display address if available #}
+                            <p class="address">{{ chemist_address_1 }}</p>
+                        {% endif %}
+                        {% if table_data_1 and table_data_1 != "<table></table>" %}
+                            <div class="table-responsive">
+                                {{ table_data_1|safe }}
+                            </div>
+                        {% else %}
+                            <p style="text-align: center;">No data available for Chemist 1.</p>
+                        {% endif %}
+                    </div>
+                    <div class="separator"></div> {# Black line separator #}
+                    <div class="comparison-column">
+                        <h3>{{ chemist_name_2 }}</h3>
+                        {% if chemist_address_2 %} {# Display address if available #}
+                            <p class="address">{{ chemist_address_2 }}</p>
+                        {% endif %}
+                        {% if table_data_2 and table_data_2 != "<table></table>" %}
+                            <div class="table-responsive">
+                                {{ table_data_2|safe }}
+                            </div>
+                        {% else %}
+                            <p style="text-align: center;">No data available for Chemist 2.</p>
+                        {% endif %}
+                    </div>
+                </div>
+            {% else %}
+                {# Single view #}
+                {% if table_data and table_data != "<table></table>" %}
+                    <h3>{{ chemist_id_display }}</h3> {# Display name/ID for single view #}
+                    {% if chemist_address_1 %} {# Display address if available for single view #}
+                        <p class="address">{{ chemist_address_1 }}</p>
+                    {% endif %}
+                    <div class="table-responsive">
+                        {{ table_data|safe }}
+                    </div>
+                {% else %}
+                    <p style="text-align: center;">No data available to display for the selected criteria, or the data processing resulted in an empty table.</p>
+                {% endif %}
+            {% endif %}
+
+            <div class="action-links">
+                <a href="{{ url_for('download_excel') }}" class="download-button">Download as Excel ({{ download_filename }})</a>
+            </div>
+        {% else %}
+            <p style="text-align: center;">No data available to display for the selected criteria, or the data processing resulted in an empty table.</p>
+        {% endif %}
+
+        <div class="action-links">
+            <a href="{{ url_for('index') }}" class="back-button">Back to Filter</a>
+        </div>
+    </div>
+</body>
+</html>
