@@ -55,9 +55,9 @@
             background-color: #f2f2f2;
             font-weight: 600;
             color: #444;
-            position: sticky; /* Optional: make headers sticky during horizontal scroll */
-            top: 0;           /* Optional: make headers sticky during horizontal scroll */
-            z-index: 1;       /* Optional: make headers sticky during horizontal scroll */
+            position: sticky; 
+            top: 0;          
+            z-index: 1;      
         }
         .data-table tr:nth-child(even) {
             background-color: #f9f9f9;
@@ -91,8 +91,7 @@
         .flash-warning { background-color: #fff3cd; color: #856404; border: 1px solid #ffeeba; }
         .flash-info { background-color: #d1ecf1; color: #0c5460; border: 1px solid #bee5eb; }
 
-        /* Styles for single view chemist section (if needed, app.py now includes this in table_data for single view) */
-        .chemist-section { /* Used by app.py for single view structure */
+        .chemist-section { 
             margin-bottom: 25px; 
             padding-bottom: 15px; 
         }
@@ -109,6 +108,24 @@
             color: #555;
             margin-top: 0;
             margin-bottom: 1em;
+        }
+
+        /* Styles for the separator column in comparison view (7th column) */
+        .data-table th:nth-child(7),
+        .data-table td:nth-child(7) {
+            background-color: #000000 !important; /* Black background */
+            width: 15px !important;             /* Narrower width */
+            min-width: 15px !important;         /* Enforce min width */
+            max-width: 15px !important;         /* Enforce max width */
+            padding: 10px 3px !important;       /* Minimal horizontal padding */
+            border-left: 1px solid #333 !important; 
+            border-right: 1px solid #333 !important;
+        }
+        /* Ensure no text in the separator header */
+        .data-table th:nth-child(7) {
+            color: #000000 !important; /* Make text color same as background */
+            font-size: 1px !important; /* Make font tiny if any text node exists */
+            line-height: 1px !important;
         }
 
     </style>

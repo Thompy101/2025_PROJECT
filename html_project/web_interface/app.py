@@ -221,7 +221,6 @@ def filter_data():
             return redirect(url_for('index'))
 
         def process_chemist_data(df_data_proc, chemist_id_to_filter, df_details_proc):
-            # This function remains largely the same, preparing individual chemist data
             expected_cols_final_display = ['Chemist ID', 'Name', 'Year', 'Month', 'Number of Items', 'Rolling 12-Month Average']
             if not chemist_id_to_filter: return pd.DataFrame(columns=expected_cols_final_display)
             filtered_df = df_data_proc[df_data_proc['Chemist'] == chemist_id_to_filter].copy()
@@ -257,8 +256,7 @@ def filter_data():
             final_df_with_month_num = merged_df.drop(columns=['Chemist'])
             final_df_display = final_df_with_month_num.sort_values(by=['Year', 'Month', 'Chemist ID'], ascending=[False, False, True]).reset_index(drop=True)
             if 'Month_Num' in final_df_display.columns: final_df_display = final_df_display.drop(columns=['Month_Num'])
-            # Do not reorder to expected_cols_final_display here, as we need specific columns for merge later
-            return final_df_display
+            return final_df_display # Return with all processed columns for potential merge
 
 
         if view_type == "single":
@@ -270,21 +268,22 @@ def filter_data():
             download_filename = f"chemist_{chemist_id_1}_filtered_data.xlsx"
             
             final_display_df = process_chemist_data(df_main_data, chemist_id_1, df_chemist_details)
-            # Select only the original expected columns for single view display
+            
+            # Ensure all expected columns for single view are present
             expected_single_cols = ['Chemist ID', 'Name', 'Year', 'Month', 'Number of Items', 'Rolling 12-Month Average']
-            final_display_df_single_view = final_display_df.copy()
+            df_for_single_html = final_display_df.copy()
             for col in expected_single_cols:
-                if col not in final_display_df_single_view.columns:
-                     final_display_df_single_view[col] = pd.NA # Add if missing
-            final_display_df_single_view = final_display_df_single_view[expected_single_cols]
+                if col not in df_for_single_html.columns:
+                     df_for_single_html[col] = pd.NA 
+            df_for_single_html = df_for_single_html[expected_single_cols]
 
 
             html_parts_single = ["<div class='chemist-section'>"]
-            if not final_display_df_single_view.empty:
+            if not df_for_single_html.empty:
                  if chemist_address and chemist_address != "Address not found":
                     html_parts_single.append(f"<p class='chemist-address'><em>{chemist_address}</em></p>")
                  html_parts_single.append("<div class='table-responsive'>")
-                 html_parts_single.append(final_display_df_single_view.to_html(classes='data-table', index=False, na_rep='N/A', border=0))
+                 html_parts_single.append(df_for_single_html.to_html(classes='data-table', index=False, na_rep='N/A', border=0))
                  html_parts_single.append("</div>")
             else:
                 flash(f"No data found for Chemist ID {chemist_id_1} with the selected filters.", "info")
@@ -292,7 +291,7 @@ def filter_data():
             html_parts_single.append("</div>")
             table_html = "\n".join(html_parts_single)
             
-            session['processed_data'] = final_display_df_single_view.to_dict(orient='records')
+            session['processed_data'] = df_for_single_html.to_dict(orient='records') # Use the correctly columned df
             session['output_filename'] = download_filename
 
         elif view_type == "comparison":
@@ -308,63 +307,87 @@ def filter_data():
             df1_processed = process_chemist_data(df_main_data, chemist_id_1, df_chemist_details)
             df2_processed = process_chemist_data(df_main_data, chemist_id_2, df_chemist_details)
 
+            # Define base columns needed from process_chemist_data for renaming
+            base_cols_for_rename = ['Year', 'Month', 'Chemist ID', 'Name', 'Number of Items', 'Rolling 12-Month Average']
+
             # Rename columns for Chemist 1
-            df1_renamed = df1_processed.rename(columns={
-                'Chemist ID': 'Chemist ID_C1', 'Name': 'Name_C1',
-                'Number of Items': 'Items_C1', 'Rolling 12-Month Average': 'RollingAvg_C1'
-            })[['Year', 'Month', 'Chemist ID_C1', 'Name_C1', 'Items_C1', 'RollingAvg_C1']] if not df1_processed.empty else pd.DataFrame(columns=['Year', 'Month', 'Chemist ID_C1', 'Name_C1', 'Items_C1', 'RollingAvg_C1'])
+            df1_renamed = pd.DataFrame()
+            if not df1_processed.empty:
+                df1_temp = df1_processed.copy()
+                for col in base_cols_for_rename: # Ensure all base columns exist before rename
+                    if col not in df1_temp.columns: df1_temp[col] = pd.NA
+                df1_renamed = df1_temp[base_cols_for_rename].rename(columns={
+                    'Chemist ID': 'Chemist ID_C1', 'Name': 'Name_C1',
+                    'Number of Items': 'Items_C1', 'Rolling 12-Month Average': 'RollingAvg_C1'
+                })
 
             # Rename columns for Chemist 2
-            df2_renamed = df2_processed.rename(columns={
-                'Chemist ID': 'Chemist ID_C2', 'Name': 'Name_C2',
-                'Number of Items': 'Items_C2', 'Rolling 12-Month Average': 'RollingAvg_C2'
-            })[['Year', 'Month', 'Chemist ID_C2', 'Name_C2', 'Items_C2', 'RollingAvg_C2']] if not df2_processed.empty else pd.DataFrame(columns=['Year', 'Month', 'Chemist ID_C2', 'Name_C2', 'Items_C2', 'RollingAvg_C2'])
-
-            merged_df = pd.DataFrame()
+            df2_renamed = pd.DataFrame()
+            if not df2_processed.empty:
+                df2_temp = df2_processed.copy()
+                for col in base_cols_for_rename: # Ensure all base columns exist
+                    if col not in df2_temp.columns: df2_temp[col] = pd.NA
+                df2_renamed = df2_temp[base_cols_for_rename].rename(columns={
+                    'Chemist ID': 'Chemist ID_C2', 'Name': 'Name_C2',
+                    'Number of Items': 'Items_C2', 'Rolling 12-Month Average': 'RollingAvg_C2'
+                })
+            
+            merged_df_for_html = pd.DataFrame() # This will be used for HTML and download
             if df1_renamed.empty and df2_renamed.empty:
                 flash("No data found for either chemist with the selected filters.", "info")
                 table_html = "<p style='text-align: center;'>No data available for comparison.</p>"
             else:
-                # Ensure 'Month' is string for merging, as Categorical might cause issues if not identical
                 if not df1_renamed.empty: df1_renamed['Month'] = df1_renamed['Month'].astype(str)
                 if not df2_renamed.empty: df2_renamed['Month'] = df2_renamed['Month'].astype(str)
 
                 if df1_renamed.empty:
-                    merged_df = df2_renamed.copy()
-                    for col in ['Chemist ID_C1', 'Name_C1', 'Items_C1', 'RollingAvg_C1']: merged_df[col] = pd.NA
+                    merged_df_for_html = df2_renamed.copy()
+                    for col in ['Chemist ID_C1', 'Name_C1', 'Items_C1', 'RollingAvg_C1']: merged_df_for_html[col] = pd.NA
                 elif df2_renamed.empty:
-                    merged_df = df1_renamed.copy()
-                    for col in ['Chemist ID_C2', 'Name_C2', 'Items_C2', 'RollingAvg_C2']: merged_df[col] = pd.NA
+                    merged_df_for_html = df1_renamed.copy()
+                    for col in ['Chemist ID_C2', 'Name_C2', 'Items_C2', 'RollingAvg_C2']: merged_df_for_html[col] = pd.NA
                 else:
-                    merged_df = pd.merge(df1_renamed, df2_renamed, on=['Year', 'Month'], how='outer')
+                    merged_df_for_html = pd.merge(df1_renamed, df2_renamed, on=['Year', 'Month'], how='outer')
                 
-                if not merged_df.empty:
-                    merged_df['Separator'] = '' # Blank column
+                if not merged_df_for_html.empty:
+                    # Add the separator column with a placeholder name for now
+                    merged_df_for_html['_Separator_Placeholder_'] = '' 
                     
-                    # Define the final column order
                     final_columns_ordered = [
                         'Year', 'Month',
                         'Chemist ID_C1', 'Name_C1', 'Items_C1', 'RollingAvg_C1',
-                        'Separator',
+                        '_Separator_Placeholder_', # Placeholder name
                         'Chemist ID_C2', 'Name_C2', 'Items_C2', 'RollingAvg_C2'
                     ]
-                    # Ensure all columns exist and are in order
                     for col in final_columns_ordered:
-                        if col not in merged_df.columns:
-                            merged_df[col] = pd.NA
-                    merged_df = merged_df[final_columns_ordered]
+                        if col not in merged_df_for_html.columns:
+                            merged_df_for_html[col] = pd.NA
+                    merged_df_for_html = merged_df_for_html[final_columns_ordered]
 
-                    # Sort the merged table
-                    merged_df['Month_Num_Sort'] = merged_df['Month'].map(MONTH_TO_NUM)
-                    merged_df = merged_df.sort_values(by=['Year', 'Month_Num_Sort'], ascending=[False, False]).drop(columns=['Month_Num_Sort'])
+                    # Sort before renaming for HTML
+                    merged_df_for_html['Month_Num_Sort'] = merged_df_for_html['Month'].map(MONTH_TO_NUM)
+                    merged_df_for_html = merged_df_for_html.sort_values(
+                        by=['Year', 'Month_Num_Sort'], ascending=[False, False]
+                    ).drop(columns=['Month_Num_Sort'])
+                    
+                    # Prepare a copy for HTML and rename the separator column to ''
+                    df_html_output = merged_df_for_html.copy()
+                    df_html_output.rename(columns={'_Separator_Placeholder_': ''}, inplace=True) # Rename for no header
                     
                     table_html = "<div class='table-responsive'>"
-                    table_html += merged_df.to_html(classes='data-table', index=False, na_rep='N/A', border=0, escape=False)
+                    table_html += df_html_output.to_html(classes='data-table', index=False, na_rep='N/A', escape=False) # border=0 removed
                     table_html += "</div>"
-                else: # Should be caught by the initial empty check, but as a fallback
+                else: 
                     table_html = "<p style='text-align: center;'>No data available for comparison after merging.</p>"
             
-            session['processed_data'] = merged_df.to_dict(orient='records') if not merged_df.empty else []
+            # For download, use merged_df_for_html but drop the placeholder separator
+            df_for_download = merged_df_for_html.copy()
+            if '_Separator_Placeholder_' in df_for_download.columns:
+                df_for_download = df_for_download.drop(columns=['_Separator_Placeholder_'])
+            if 'Month_Num_Sort' in df_for_download.columns: # Should have been dropped, but as a safeguard
+                df_for_download = df_for_download.drop(columns=['Month_Num_Sort'])
+
+            session['processed_data'] = df_for_download.to_dict(orient='records') if not df_for_download.empty else []
             session['output_filename'] = download_filename
             
         return render_template('results.html',
