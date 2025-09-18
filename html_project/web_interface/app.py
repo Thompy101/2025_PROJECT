@@ -16,6 +16,9 @@ GCS_BUCKET_NAME = "project-2025-bso-data-storage" # << REPLACE WITH YOUR GCS BUC
 GCS_DATA_FILENAME = "merged_bso_dispensing_data.csv"
 CHEMIST_DETAILS_CSV_PATH = "formatted_chemist_list.csv"
 
+# Cache for GP practice data
+_gp_practice_cache = None
+
 # Month to number mapping for sorting (used for rolling average calculation)
 MONTH_TO_NUM = {
     'January': 1, 'February': 2, 'March': 3, 'April': 4, 'May': 5, 'June': 6,
@@ -107,6 +110,40 @@ def load_chemist_details(file_path):
             flash(f"Error loading chemist details CSV: {e}", "danger")
             return pd.DataFrame()
 
+def load_gp_practices():
+    """Load GP practice data from the main BSO data and cache unique practices."""
+    global _gp_practice_cache
+    if _gp_practice_cache is not None:
+        app.logger.info("GP practice data is cached.")
+        return _gp_practice_cache
+    else:
+        app.logger.info("Loading GP practices from main data (first load for this instance).")
+        try:
+            df_main_data = load_csv_data_from_gcs(GCS_BUCKET_NAME, GCS_DATA_FILENAME, "main BSO dispensing data for GP practices")
+            if df_main_data.empty or 'Practice' not in df_main_data.columns:
+                app.logger.error("No Practice column found in main data for GP practice loading")
+                return pd.DataFrame()
+            
+            # Get unique practices with basic info
+            unique_practices = df_main_data['Practice'].dropna().unique()
+            practice_data = []
+            for practice in unique_practices:
+                # Clean up practice name
+                practice_name = str(practice).strip()
+                if practice_name and practice_name.lower() != 'nan':
+                    practice_data.append({
+                        'Practice ID': practice_name,
+                        'Name': practice_name,
+                        'Full Address': 'GP Practice Address'  # Placeholder since we don't have detailed GP practice addresses
+                    })
+            
+            _gp_practice_cache = pd.DataFrame(practice_data)
+            app.logger.info(f"GP practices loaded: {len(_gp_practice_cache)} unique practices.")
+            return _gp_practice_cache
+        except Exception as e:
+            app.logger.error(f"Error loading GP practices: {e}", exc_info=True)
+            return pd.DataFrame()
+
 # --- Route Definitions ---
 @app.route('/')
 def index():
@@ -148,6 +185,47 @@ def index():
 
     return render_template('index.html', years=years, months=months, chemist_ids_json=chemist_ids_json)
 
+@app.route('/gp_practices')
+def gp_practices():
+    """GP practices page for filtering by practice instead of chemist."""
+    df_main_data = load_csv_data_from_gcs(GCS_BUCKET_NAME, GCS_DATA_FILENAME, "main BSO dispensing data (for GP practices)")
+    df_gp_practices = load_gp_practices()
+
+    if df_main_data.empty and df_gp_practices.empty:
+        return render_template('gp_practices.html', years=[], months=[], practice_ids_json=[])
+    elif df_main_data.empty:
+        flash("Warning: Main dispensing data could not be loaded. Filtering options might be incomplete.", "warning")
+    elif df_gp_practices.empty:
+        flash("Warning: GP practice data could not be loaded. Practice search might not work.", "warning")
+
+    years = []
+    months = ORDERED_MONTH_NAMES 
+
+    if 'Year' in df_main_data.columns:
+        try:
+            years = sorted(df_main_data['Year'].dropna().unique().astype(int).tolist(), reverse=True)
+        except ValueError:
+            app.logger.warning("Could not convert 'Year' column to int for dropdown. Using raw unique values.")
+            years = sorted(df_main_data['Year'].dropna().unique().tolist(), reverse=True)
+            flash("Warning: 'Year' column contains non-numeric data. Year filtering might behave unexpectedly.", "warning")
+    else:
+        app.logger.warning("Missing 'Year' column in main data for GP practices page.")
+        if not df_main_data.empty:
+             flash("Data is missing 'Year' column. Year filtering might be limited.", "warning")
+
+    if 'Month' not in df_main_data.columns and not df_main_data.empty:
+        app.logger.warning("Missing 'Month' column in main data for GP practices page.")
+        flash("Data is missing 'Month' column. Month filtering might be limited.", "warning")
+
+    practice_ids_json = []
+    if not df_gp_practices.empty and 'Practice ID' in df_gp_practices.columns and 'Name' in df_gp_practices.columns:
+        practice_ids_json = df_gp_practices[['Practice ID', 'Name']].to_dict(orient='records')
+    else:
+        if not df_gp_practices.empty:
+            flash("GP practice data is missing 'Practice ID' or 'Name' columns. Practice search may be impaired.", "warning")
+
+    return render_template('gp_practices.html', years=years, months=months, practice_ids_json=practice_ids_json)
+
 @app.route('/get_chemist_suggestions')
 def get_chemist_suggestions():
     query = request.args.get('query', '').lower()
@@ -171,6 +249,31 @@ def get_chemist_suggestions():
         df_chemist_details['Full Address'].str.lower().str.contains(query, na=False)
     ].head(10)[['Chemist ID', 'Name', 'Full Address']].to_dict(orient='records')
     return jsonify(filtered_chemists)
+
+@app.route('/get_practice_suggestions')
+def get_practice_suggestions():
+    """Get GP practice suggestions for autocomplete."""
+    query = request.args.get('query', '').lower()
+    df_gp_practices = load_gp_practices()
+    if df_gp_practices.empty:
+        return jsonify([])
+
+    required_cols = ['Name', 'Practice ID', 'Full Address']
+    for col in required_cols:
+        if col not in df_gp_practices.columns:
+            app.logger.error(f"'{col}' column missing in GP practice data for suggestions.")
+            return jsonify([]) 
+
+    df_gp_practices['Full Address'] = df_gp_practices['Full Address'].astype(str)
+    df_gp_practices['Name'] = df_gp_practices['Name'].astype(str)
+    df_gp_practices['Practice ID'] = df_gp_practices['Practice ID'].astype(str)
+
+    filtered_practices = df_gp_practices[
+        df_gp_practices['Name'].str.lower().str.contains(query, na=False) |
+        df_gp_practices['Practice ID'].str.contains(query, na=False) | 
+        df_gp_practices['Full Address'].str.lower().str.contains(query, na=False)
+    ].head(10)[['Practice ID', 'Name', 'Full Address']].to_dict(orient='records')
+    return jsonify(filtered_practices)
 
 @app.route('/filter_data', methods=['POST'])
 def filter_data():
@@ -400,6 +503,194 @@ def filter_data():
         app.logger.error(f"Error during data filtering: {e}", exc_info=True)
         flash(f"An unexpected error occurred during filtering: {str(e)}. Please check logs or try again.", "danger")
         return redirect(url_for('index'))
+
+@app.route('/filter_practice_data', methods=['POST'])
+def filter_practice_data():
+    """Filter GP practice data similar to chemist filtering."""
+    try:
+        df_main_data = load_csv_data_from_gcs(GCS_BUCKET_NAME, GCS_DATA_FILENAME, "main BSO dispensing data")
+        df_gp_practices = load_gp_practices()
+
+        if df_main_data.empty or df_gp_practices.empty:
+            return redirect(url_for('gp_practices'))
+
+        if 'Month' in df_main_data.columns:
+            app.logger.info("Standardizing 'Month' column in main data for GP practices...")
+            df_main_data['Month'] = df_main_data['Month'].apply(standardize_month_value)
+            if not df_main_data.empty and 'Month' in df_main_data.columns:
+                app.logger.info(f"Example 'Month' values after standardization (first 5 unique if available): {df_main_data['Month'].dropna().unique()[:5].tolist()}")
+        else:
+            app.logger.warning("Main data is missing 'Month' column. Month-related processing might be affected.")
+            flash("Warning: 'Month' column is missing in the main dataset. Month-based filtering and analysis will be impacted.", "warning")
+
+        # Get form data
+        practice_id_1 = request.form.get('selected_practice_id_1', '').strip()
+        practice_id_2 = request.form.get('selected_practice_id_2', '').strip()
+        selected_year = request.form.get('year')
+        selected_month = request.form.get('month')
+
+        if not practice_id_1:
+            flash("Error: Please select at least one GP practice.", "danger")
+            return redirect(url_for('gp_practices'))
+
+        # Determine view type
+        view_type = "comparison" if practice_id_2 else "single"
+
+        # Check if Practice column exists
+        if 'Practice' not in df_main_data.columns:
+            flash("Critical Error: 'Practice' column missing from main dispensing data.", "danger")
+            return redirect(url_for('gp_practices'))
+
+        if 'Practice ID' in df_gp_practices.columns:
+            df_gp_practices['Practice ID'] = df_gp_practices['Practice ID'].astype(str)
+        else:
+            flash("Critical Error: 'Practice ID' column missing from GP practice data.", "danger")
+            return redirect(url_for('gp_practices'))
+
+        def process_practice_data(df_data_proc, practice_id_to_filter, df_details_proc):
+            expected_cols_final_display = ['Practice ID', 'Name', 'Year', 'Month', 'Number of Items', 'Rolling 12-Month Average']
+            if not practice_id_to_filter: return pd.DataFrame(columns=expected_cols_final_display)
+            filtered_df = df_data_proc[df_data_proc['Practice'] == practice_id_to_filter].copy()
+            if selected_year and selected_year != 'all':
+                if 'Year' in filtered_df.columns:
+                    try: 
+                        filtered_df['Year'] = filtered_df['Year'].astype(int)
+                        filtered_df = filtered_df[filtered_df['Year'] == int(selected_year)].copy()
+                    except ValueError: app.logger.warning(f"Year filter for practice {practice_id_to_filter}: Could not convert 'Year' to int.")
+                else: app.logger.warning(f"Year filter applied, but 'Year' column missing for practice {practice_id_to_filter}")
+            if selected_month and selected_month != 'all':
+                if 'Month' in filtered_df.columns: filtered_df = filtered_df[filtered_df['Month'] == selected_month].copy()
+                else: app.logger.warning(f"Month filter applied, but 'Month' column missing for practice {practice_id_to_filter}")
+            if filtered_df.empty: return pd.DataFrame(columns=expected_cols_final_display)
+            if not all(col in filtered_df.columns for col in ['Practice', 'Year', 'Month', 'Number of Items']):
+                app.logger.error(f"Missing required columns for aggregation for practice {practice_id_to_filter}.")
+                return pd.DataFrame(columns=expected_cols_final_display)
+            aggregated_df = filtered_df.groupby(['Practice', 'Year', 'Month'])['Number of Items'].sum().reset_index()
+            if 'Month' not in aggregated_df.columns: return pd.DataFrame(columns=expected_cols_final_display)
+            app.logger.info(f"Practice {practice_id_to_filter}: Unique 'Month' values after aggregation: {aggregated_df['Month'].dropna().unique().tolist()}")
+            aggregated_df['Month_Num'] = aggregated_df['Month'].map(MONTH_TO_NUM)
+            if aggregated_df['Month_Num'].isnull().any():
+                failed_months = aggregated_df[aggregated_df['Month_Num'].isnull()]['Month'].dropna().unique().tolist()
+                app.logger.warning(f"Practice {practice_id_to_filter}: Month-to-number mapping FAILED for: {failed_months}")
+            aggregated_df['Month'] = pd.Categorical(aggregated_df['Month'], categories=ORDERED_MONTH_NAMES, ordered=True)
+            if aggregated_df['Month'].isnull().any(): app.logger.warning(f"Practice {practice_id_to_filter}: Categorical 'Month' conversion resulted in NaNs.")
+            original_rows = len(aggregated_df)
+            aggregated_df_sorted_chrono = aggregated_df.dropna(subset=['Month_Num']).sort_values(by=['Practice', 'Year', 'Month_Num'], ascending=[True, True, True]).copy()
+            if original_rows > len(aggregated_df_sorted_chrono): app.logger.warning(f"Practice {practice_id_to_filter}: Dropped {original_rows - len(aggregated_df_sorted_chrono)} rows due to unmappable months.")
+            if aggregated_df_sorted_chrono.empty: return pd.DataFrame(columns=expected_cols_final_display)
+            aggregated_df_sorted_chrono['Rolling 12-Month Average'] = aggregated_df_sorted_chrono.groupby('Practice')['Number of Items'].transform(lambda x: x.rolling(window=12, min_periods=1).mean()).round(0).astype(int)
+            merged_df = pd.merge(aggregated_df_sorted_chrono, df_details_proc[['Practice ID', 'Name']], left_on='Practice', right_on='Practice ID', how='left')
+            final_df_with_month_num = merged_df.drop(columns=['Practice'])
+            final_df_display = final_df_with_month_num.sort_values(by=['Year', 'Month', 'Practice ID'], ascending=[False, False, True]).reset_index(drop=True)
+            if 'Month_Num' in final_df_display.columns: final_df_display = final_df_display.drop(columns=['Month_Num'])
+            return final_df_display
+
+        if view_type == "single":
+            practice_info = df_gp_practices[df_gp_practices['Practice ID'] == practice_id_1]
+            practice_name = practice_info['Name'].iloc[0] if not practice_info.empty and 'Name' in practice_info.columns else practice_id_1
+            practice_address = practice_info['Full Address'].iloc[0] if not practice_info.empty and 'Full Address' in practice_info.columns else "Address not found"
+            
+            practice_id_display = f"{practice_name} ({practice_id_1})" 
+            download_filename = f"gp_practice_{practice_id_1}_filtered_data.xlsx"
+            
+            final_display_df = process_practice_data(df_main_data, practice_id_1, df_gp_practices)
+            
+            # Ensure all expected columns for single view are present
+            expected_single_cols = ['Practice ID', 'Name', 'Year', 'Month', 'Number of Items', 'Rolling 12-Month Average']
+            df_for_single_html = final_display_df.copy()
+            for col in expected_single_cols:
+                if col not in df_for_single_html.columns:
+                     df_for_single_html[col] = pd.NA 
+            df_for_single_html = df_for_single_html[expected_single_cols]
+
+            # Store in session for download
+            session['processed_data'] = final_display_df.to_json(orient='records') if not final_display_df.empty else None
+            session['download_filename'] = download_filename
+
+            return render_template('practice_results.html', 
+                                   table_data=df_for_single_html.to_dict(orient='records'),
+                                   practice_name=practice_name,
+                                   practice_address=practice_address,
+                                   view_type=view_type,
+                                   download_filename=download_filename)
+        
+        else:  # comparison view
+            # Process both practices
+            df1_processed = process_practice_data(df_main_data, practice_id_1, df_gp_practices)
+            df2_processed = process_practice_data(df_main_data, practice_id_2, df_gp_practices)
+
+            # Define base columns needed from process_practice_data for renaming
+            base_cols_for_rename = ['Year', 'Month', 'Practice ID', 'Name', 'Number of Items', 'Rolling 12-Month Average']
+
+            # Rename columns for Practice 1
+            df1_renamed = pd.DataFrame()
+            if not df1_processed.empty:
+                df1_temp = df1_processed.copy()
+                for col in base_cols_for_rename:
+                    if col not in df1_temp.columns: df1_temp[col] = pd.NA
+                df1_renamed = df1_temp[base_cols_for_rename].rename(columns={
+                    'Practice ID': 'Practice ID_P1', 'Name': 'Name_P1',
+                    'Number of Items': 'Number of Items_P1', 'Rolling 12-Month Average': 'Rolling 12-Month Average_P1'
+                })
+
+            # Rename columns for Practice 2
+            df2_renamed = pd.DataFrame()
+            if not df2_processed.empty:
+                df2_temp = df2_processed.copy()
+                for col in base_cols_for_rename:
+                    if col not in df2_temp.columns: df2_temp[col] = pd.NA
+                df2_renamed = df2_temp[base_cols_for_rename].rename(columns={
+                    'Practice ID': 'Practice ID_P2', 'Name': 'Name_P2',
+                    'Number of Items': 'Number of Items_P2', 'Rolling 12-Month Average': 'Rolling 12-Month Average_P2'
+                })
+
+            # Merge on Year and Month
+            if not df1_renamed.empty and not df2_renamed.empty:
+                comparison_df = pd.merge(df1_renamed, df2_renamed, on=['Year', 'Month'], how='outer')
+            elif not df1_renamed.empty:
+                comparison_df = df1_renamed.copy()
+                for col in ['Practice ID_P2', 'Name_P2', 'Number of Items_P2', 'Rolling 12-Month Average_P2']:
+                    comparison_df[col] = pd.NA
+            elif not df2_renamed.empty:
+                comparison_df = df2_renamed.copy()
+                for col in ['Practice ID_P1', 'Name_P1', 'Number of Items_P1', 'Rolling 12-Month Average_P1']:
+                    comparison_df[col] = pd.NA
+            else:
+                comparison_df = pd.DataFrame()
+
+            # Sort by Year (desc) and Month (desc)
+            if not comparison_df.empty and 'Year' in comparison_df.columns and 'Month' in comparison_df.columns:
+                comparison_df['Month'] = pd.Categorical(comparison_df['Month'], categories=ORDERED_MONTH_NAMES, ordered=True)
+                comparison_df = comparison_df.sort_values(by=['Year', 'Month'], ascending=[False, False]).reset_index(drop=True)
+
+            # Get practice info for display
+            practice_info_1 = df_gp_practices[df_gp_practices['Practice ID'] == practice_id_1]
+            practice_name_1 = practice_info_1['Name'].iloc[0] if not practice_info_1.empty and 'Name' in practice_info_1.columns else practice_id_1
+            practice_address_1 = practice_info_1['Full Address'].iloc[0] if not practice_info_1.empty and 'Full Address' in practice_info_1.columns else "Address not found"
+
+            practice_info_2 = df_gp_practices[df_gp_practices['Practice ID'] == practice_id_2]
+            practice_name_2 = practice_info_2['Name'].iloc[0] if not practice_info_2.empty and 'Name' in practice_info_2.columns else practice_id_2
+            practice_address_2 = practice_info_2['Full Address'].iloc[0] if not practice_info_2.empty and 'Full Address' in practice_info_2.columns else "Address not found"
+
+            download_filename = f"gp_practices_{practice_id_1}_vs_{practice_id_2}_comparison.xlsx"
+
+            # Store in session for download
+            session['processed_data'] = comparison_df.to_json(orient='records') if not comparison_df.empty else None
+            session['download_filename'] = download_filename
+
+            return render_template('practice_results.html',
+                                   table_data=comparison_df.to_dict(orient='records'),
+                                   practice_name_1=practice_name_1,
+                                   practice_address_1=practice_address_1,
+                                   practice_name_2=practice_name_2, 
+                                   practice_address_2=practice_address_2,
+                                   view_type=view_type,
+                                   download_filename=download_filename)
+
+    except Exception as e:
+        app.logger.error(f"Error during GP practice data filtering: {e}", exc_info=True)
+        flash(f"An unexpected error occurred during filtering: {str(e)}. Please check logs or try again.", "danger")
+        return redirect(url_for('gp_practices'))
 
 @app.route('/download_excel')
 def download_excel():

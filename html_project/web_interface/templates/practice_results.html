@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Filtered GP Practice Data</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f4f7f6;
+            color: #333;
+            display: flex; 
+            flex-direction: column;
+            align-items: center;
+        }
+        .container {
+            background-color: #fff;
+            padding: 30px 40px;
+            border-radius: 12px;
+            box-shadow: 0 8px 16px rgba(0, 0, 0, 0.1);
+            width: 100%;
+            max-width: 1400px; /* Increased max-width for wider table */
+            margin-top: 20px; 
+        }
+        h1 { /* Overall Page Title */
+            color: #2c3e50;
+            text-align: center;
+            margin-bottom: 10px;
+            font-size: 1.8em;
+        }
+        h2.subtitle { /* Subtitle for view type */
+            color: #555;
+            text-align: center;
+            margin-bottom: 25px;
+            font-size: 1.2em;
+        }
+        .navigation {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        .navigation a {
+            color: #3498db;
+            text-decoration: none;
+            margin: 0 15px;
+            padding: 8px 16px;
+            border-radius: 5px;
+            border: 1px solid #3498db;
+            transition: all 0.3s;
+        }
+        .navigation a:hover {
+            background-color: #3498db;
+            color: white;
+        }
+        .navigation a.active {
+            background-color: #3498db;
+            color: white;
+        }
+        .table-responsive {
+            overflow-x: auto; 
+            margin-bottom: 20px; 
+        }
+        .data-table { /* Applied by pandas to_html */
+            width: 100%;
+            border-collapse: collapse;
+            /* margin-bottom removed, handled by .table-responsive */
+        }
+        .data-table th, .data-table td {
+            border: 1px solid #ddd;
+            padding: 10px;
+            text-align: left;
+        }
+        .data-table th {
+            background-color: #f8f9fa;
+            font-weight: bold;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+        .data-table tr:nth-child(even) {
+            background-color: #f9f9f9;
+        }
+        .data-table tr:hover {
+            background-color: #e8f4f8;
+        }
+        .data-table td.number {
+            text-align: right;
+            font-family: 'Courier New', monospace;
+        }
+        .practice-header {
+            background-color: #e8f4f8;
+            border: 1px solid #b3d9f2;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 20px;
+        }
+        .practice-header h3 {
+            margin: 0 0 5px 0;
+            color: #2c3e50;
+            font-size: 1.3em;
+        }
+        .practice-header p {
+            margin: 0;
+            color: #555;
+            font-size: 0.95em;
+        }
+        .comparison-headers {
+            display: flex;
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+        .comparison-headers .practice-header {
+            flex: 1;
+        }
+        .action-buttons {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        .btn {
+            display: inline-block;
+            padding: 10px 20px;
+            margin: 0 10px;
+            background-color: #3498db;
+            color: white;
+            text-decoration: none;
+            border-radius: 5px;
+            font-weight: 500;
+            transition: background-color 0.3s;
+        }
+        .btn:hover {
+            background-color: #2980b9;
+        }
+        .btn-success {
+            background-color: #27ae60;
+        }
+        .btn-success:hover {
+            background-color: #229954;
+        }
+        .no-data {
+            text-align: center;
+            color: #7f8c8d;
+            font-style: italic;
+            margin: 20px 0;
+        }
+        .flash-messages {
+            margin-bottom: 20px;
+        }
+        .flash-messages ul {
+            list-style-type: none;
+            padding: 0;
+            margin: 0;
+        }
+        .flash-messages li {
+            padding: 12px 16px;
+            margin-bottom: 10px;
+            border-radius: 6px;
+            font-weight: 500;
+        }
+        .flash-danger {
+            background-color: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .flash-warning {
+            background-color: #fff3cd;
+            color: #856404;
+            border: 1px solid #ffeaa7;
+        }
+        .flash-info {
+            background-color: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
+        }
+        .flash-success {
+            background-color: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+    </style>
+</head>
+<body>
+    {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+            <div class="flash-messages">
+            <ul>
+            {% for category, message in messages %}
+                <li class="flash-{{ category }}">{{ message }}</li>
+            {% endfor %}
+            </ul>
+        {% endif %}
+    {% endwith %}
+
+    <div class="container">
+        <div class="navigation">
+            <a href="{{ url_for('index') }}">Chemist Analysis</a>
+            <a href="{{ url_for('gp_practices') }}" class="active">GP Practice Analysis</a>
+        </div>
+
+        <h1>GP Practice Prescription Data</h1>
+
+        <div class="action-buttons">
+            <a href="{{ url_for('gp_practices') }}" class="btn">← Back to Search</a>
+            {% if table_data %}
+                <a href="{{ url_for('download_excel') }}" class="btn btn-success">📊 Download Excel</a>
+            {% endif %}
+        </div>
+
+        {% if view_type == 'single' %}
+            <div class="practice-header">
+                <h3>{{ practice_name }}</h3>
+                <p>{{ practice_address }}</p>
+            </div>
+            <h2 class="subtitle">Monthly Prescription Items</h2>
+        {% else %}
+            <h2 class="subtitle">GP Practice Comparison</h2>
+            <div class="comparison-headers">
+                <div class="practice-header">
+                    <h3>{{ practice_name_1 }}</h3>
+                    <p>{{ practice_address_1 }}</p>
+                </div>
+                <div class="practice-header">
+                    <h3>{{ practice_name_2 }}</h3>
+                    <p>{{ practice_address_2 }}</p>
+                </div>
+            </div>
+        {% endif %}
+
+        {% if table_data %}
+            <div class="table-responsive">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            {% if view_type == 'single' %}
+                                <th>Practice ID</th>
+                                <th>Name</th>
+                                <th>Year</th>
+                                <th>Month</th>
+                                <th>Number of Items</th>
+                                <th>Rolling 12-Month Average</th>
+                            {% else %}
+                                <th>Year</th>
+                                <th>Month</th>
+                                <th>Practice 1 ID</th>
+                                <th>Practice 1 Name</th>
+                                <th>Practice 1 Items</th>
+                                <th>Practice 1 Avg</th>
+                                <th>Practice 2 ID</th>
+                                <th>Practice 2 Name</th>
+                                <th>Practice 2 Items</th>
+                                <th>Practice 2 Avg</th>
+                            {% endif %}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in table_data %}
+                            <tr>
+                                {% if view_type == 'single' %}
+                                    <td>{{ row['Practice ID'] if row['Practice ID'] }}</td>
+                                    <td>{{ row['Name'] if row['Name'] }}</td>
+                                    <td>{{ row['Year'] if row['Year'] }}</td>
+                                    <td>{{ row['Month'] if row['Month'] }}</td>
+                                    <td class="number">{{ "{:,}".format(row['Number of Items']) if row['Number of Items'] else 'N/A' }}</td>
+                                    <td class="number">{{ "{:,}".format(row['Rolling 12-Month Average']) if row['Rolling 12-Month Average'] else 'N/A' }}</td>
+                                {% else %}
+                                    <td>{{ row['Year'] if row['Year'] }}</td>
+                                    <td>{{ row['Month'] if row['Month'] }}</td>
+                                    <td>{{ row['Practice ID_P1'] if row['Practice ID_P1'] }}</td>
+                                    <td>{{ row['Name_P1'] if row['Name_P1'] }}</td>
+                                    <td class="number">{{ "{:,}".format(row['Number of Items_P1']) if row['Number of Items_P1'] else 'N/A' }}</td>
+                                    <td class="number">{{ "{:,}".format(row['Rolling 12-Month Average_P1']) if row['Rolling 12-Month Average_P1'] else 'N/A' }}</td>
+                                    <td>{{ row['Practice ID_P2'] if row['Practice ID_P2'] }}</td>
+                                    <td>{{ row['Name_P2'] if row['Name_P2'] }}</td>
+                                    <td class="number">{{ "{:,}".format(row['Number of Items_P2']) if row['Number of Items_P2'] else 'N/A' }}</td>
+                                    <td class="number">{{ "{:,}".format(row['Rolling 12-Month Average_P2']) if row['Rolling 12-Month Average_P2'] else 'N/A' }}</td>
+                                {% endif %}
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        {% else %}
+            <div class="no-data">
+                <p>No data available for the selected GP practice(s) and filters.</p>
+                <p>Please try adjusting your search criteria or date range.</p>
+            </div>
+        {% endif %}
+
+        <div class="action-buttons">
+            <a href="{{ url_for('gp_practices') }}" class="btn">← Back to Search</a>
+            {% if table_data %}
+                <a href="{{ url_for('download_excel') }}" class="btn btn-success">📊 Download Excel</a>
+            {% endif %}
+        </div>
+    </div>
+
+</body>
+</html>
