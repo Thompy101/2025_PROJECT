@@ -28,8 +28,14 @@
         h1 {
             color: #2c3e50;
             text-align: center;
-            margin-bottom: 25px;
+            margin-bottom: 10px;
             font-size: 1.8em;
+        }
+        .subtitle {
+            color: #7f8c8d;
+            text-align: center;
+            margin-bottom: 25px;
+            font-size: 16px;
         }
         label {
             display: block;
@@ -133,6 +139,7 @@
             <a href="{{ url_for('gp_practices') }}">GP Practice Analysis</a>
         </div>
         <h1>Chemist Data Filter & Comparison</h1>
+        <p class="subtitle">Filter and analyze prescription data by chemist</p>
         <form method="POST" action="{{ url_for('filter_data') }}" id="chemistFilterForm">
             
             <div class="search-container">
